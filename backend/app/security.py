@@ -21,16 +21,18 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_token(user_id: str, tenant_id: str, role: str) -> str:
+def create_token(user_id: str, tenant_id: str | None = None, role: str | None = None) -> str:
     settings = get_settings()
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
-        "tenant_id": tenant_id,
-        "role": role,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=settings.access_token_expire_minutes)).timestamp()),
     }
+    if tenant_id:
+        payload["tenant_id"] = tenant_id
+    if role:
+        payload["role"] = role
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
@@ -58,21 +60,34 @@ def get_current_user(
     payload = decode_token(token)
     user_id = payload.get("sub")
     tenant_id = payload.get("tenant_id")
-    if not user_id or not tenant_id:
+    if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+
+    if tenant_id:
+        row = fetch_one(
+            """
+            SELECT u.id, u.name, u.email, u.active_tenant_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+            FROM users u
+            JOIN tenant_members tm ON tm.user_id = u.id
+            JOIN tenants t ON t.id = tm.tenant_id
+            WHERE u.id = %s AND tm.tenant_id = %s
+            """,
+            (user_id, tenant_id),
+        )
+        if not row:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not a tenant member")
+        return row
 
     row = fetch_one(
         """
-        SELECT u.id, u.name, u.email, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+        SELECT u.id, u.name, u.email, u.active_tenant_id, NULL::uuid AS tenant_id, NULL::text AS role, NULL::text AS tenant_name, NULL::text AS tenant_slug
         FROM users u
-        JOIN tenant_members tm ON tm.user_id = u.id
-        JOIN tenants t ON t.id = tm.tenant_id
-        WHERE u.id = %s AND tm.tenant_id = %s
+        WHERE u.id = %s
         """,
-        (user_id, tenant_id),
+        (user_id,),
     )
     if not row:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not a tenant member")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return row
 
 

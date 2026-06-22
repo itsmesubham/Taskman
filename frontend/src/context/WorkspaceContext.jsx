@@ -33,7 +33,17 @@ export function WorkspaceProvider({ children }) {
   const [taskDrawerDefaultStatus, setTaskDrawerDefaultStatus] = useState('TODO');
   const [boardFilter, setBoardFilter] = useState('ALL');
   const [boardQuickFilter, setBoardQuickFilter] = useState('ALL');
+  const [memberships, setMemberships] = useState([]);
+  const [authStatus, setAuthStatus] = useState(session.token ? 'loading' : 'signed_out');
+  const [inviteCode, setInviteCode] = useState(() => {
+    const match = window.location.pathname.match(/^\/(?:invite|join)\/([^/?#]+)/i);
+    return match ? decodeURIComponent(match[1]) : '';
+  });
+  const [inviteDetails, setInviteDetails] = useState(null);
+  const [inviteError, setInviteError] = useState('');
+  const [bootstrapReady, setBootstrapReady] = useState(!session.token);
   const refreshTimer = useRef(null);
+  const bootstrappingRef = useRef(false);
 
   const updateSession = useCallback((next) => {
     setSession(next);
@@ -48,8 +58,13 @@ export function WorkspaceProvider({ children }) {
   const handleUnauthorized = useCallback(() => {
     showToast('error', 'Session expired. Please login again.');
     updateSession({ ...session, token: null, user: null, tenant: null });
+    localStorage.removeItem('taskman_active_tenant');
+    setMemberships([]);
+    setAuthStatus('signed_out');
+    setBootstrapReady(true);
   }, [session, showToast, updateSession]);
   const api = useMemo(() => new ApiClient(getApiState, handleUnauthorized), [getApiState, handleUnauthorized]);
+  const publicApi = useMemo(() => new ApiClient(() => ({ token: null, apiBase: session.apiBase || DEFAULT_API_BASE })), [session.apiBase]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -57,10 +72,117 @@ export function WorkspaceProvider({ children }) {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    const syncInviteCode = () => {
+      const match = window.location.pathname.match(/^\/(?:invite|join)\/([^/?#]+)/i);
+      setInviteCode(match ? decodeURIComponent(match[1]) : '');
+    };
+    syncInviteCode();
+    window.addEventListener('popstate', syncInviteCode);
+    return () => window.removeEventListener('popstate', syncInviteCode);
+  }, []);
+
+  useEffect(() => {
+    if (!inviteCode) {
+      setInviteDetails(null);
+      setInviteError('');
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await publicApi.get(`/invites/${inviteCode}`);
+        if (!cancelled) {
+          setInviteDetails(result);
+          setInviteError('');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setInviteDetails(null);
+          setInviteError(error.message);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [inviteCode, publicApi]);
+
   const setActiveProjectId = useCallback((id) => {
     setActiveProjectIdState(id);
     localStorage.setItem('taskman_active_project', id || '');
   }, []);
+
+  const navigate = useCallback((path) => {
+    window.history.pushState({}, '', path);
+    const match = path.match(/^\/(?:invite|join)\/([^/?#]+)/i);
+    setInviteCode(match ? decodeURIComponent(match[1]) : '');
+  }, []);
+
+  const setActiveTenant = useCallback(async (tenantId, { silent = false, userOverride = null } = {}) => {
+    const result = await api.patch('/users/me/active-tenant', { tenant_id: tenantId });
+    const nextTenant = result.tenant || null;
+    const nextUser = {
+      ...(session.user || {}),
+      ...(userOverride || {}),
+      role: result.membership?.role || session.user?.role,
+      active_tenant_id: result.active_tenant_id || tenantId
+    };
+    const nextSession = {
+      ...session,
+      token: result.access_token || session.token,
+      user: nextUser,
+      tenant: nextTenant,
+      apiBase: session.apiBase || DEFAULT_API_BASE
+    };
+    localStorage.setItem('taskman_active_tenant', tenantId || '');
+    updateSession(nextSession);
+    setMemberships(result.memberships || memberships);
+    if (!silent) showSuccess(`Workspace switched to ${nextTenant?.name || 'workspace'}`);
+    setAuthStatus('ready');
+    return result;
+  }, [api, memberships, session, showSuccess, updateSession]);
+
+  const createWorkspace = useCallback(async (payload) => {
+    const result = await api.post('/tenants', payload);
+    const nextTenant = result.tenant || null;
+    const nextUser = {
+      ...(session.user || {}),
+      role: result.membership?.role || 'OWNER',
+      active_tenant_id: nextTenant?.id || null
+    };
+    localStorage.setItem('taskman_active_tenant', nextTenant?.id || '');
+    updateSession({
+      ...session,
+      token: result.access_token || session.token,
+      user: nextUser,
+      tenant: nextTenant,
+      apiBase: session.apiBase || DEFAULT_API_BASE
+    });
+    setMemberships(result.memberships || (result.membership ? [result.membership] : memberships));
+    setAuthStatus('ready');
+    return result;
+  }, [api, memberships, session, updateSession]);
+
+  const acceptInvite = useCallback(async (code) => {
+    const result = await api.post(`/invites/${code}/accept`, {});
+    const nextTenant = result.tenant || null;
+    const nextUser = {
+      ...(session.user || {}),
+      role: result.membership?.role || 'MEMBER',
+      active_tenant_id: result.active_tenant_id || nextTenant?.id || null
+    };
+    localStorage.setItem('taskman_active_tenant', nextTenant?.id || '');
+    updateSession({
+      ...session,
+      token: result.access_token || session.token,
+      user: nextUser,
+      tenant: nextTenant,
+      apiBase: session.apiBase || DEFAULT_API_BASE
+    });
+    setMemberships(result.memberships || memberships);
+    setAuthStatus('ready');
+    navigate('/');
+    return result;
+  }, [api, memberships, navigate, session, updateSession]);
 
   const openCreateTaskDrawer = useCallback((status = 'TODO') => {
     setTaskDrawerDefaultStatus(status);
@@ -72,7 +194,7 @@ export function WorkspaceProvider({ children }) {
   }, []);
 
   const loadWorkspace = useCallback(async (silent = false) => {
-    if (!session.token) return;
+    if (!session.token || !session.tenant?.id) return;
     if (!isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) {
       showError(new Error('Backend API URL must use HTTPS unless it is localhost.'));
       return;
@@ -118,7 +240,82 @@ export function WorkspaceProvider({ children }) {
   useEffect(() => { loadWorkspace(); }, [loadWorkspace]);
 
   useEffect(() => {
-    if (!session.token || !isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) return undefined;
+    let cancelled = false;
+    const bootstrap = async () => {
+      if (!session.token) {
+        setAuthStatus('signed_out');
+        setBootstrapReady(true);
+        setMemberships([]);
+        return;
+      }
+      if (bootstrappingRef.current) return;
+      bootstrappingRef.current = true;
+      setBootstrapReady(false);
+      try {
+        const [meRes, myRes] = await Promise.all([
+          api.get('/me'),
+          api.get('/tenants/my')
+        ]);
+        if (cancelled) return;
+        const nextUser = meRes.user || session.user || null;
+        const nextMemberships = myRes.tenants || meRes.memberships || [];
+        setMemberships(nextMemberships);
+        updateSession({
+          ...session,
+          user: nextUser || session.user,
+          tenant: session.tenant || null,
+          apiBase: session.apiBase || DEFAULT_API_BASE
+        });
+
+        if (inviteCode) {
+          setAuthStatus('invite');
+          return;
+        }
+
+        if (!nextMemberships.length) {
+          setAuthStatus('onboarding');
+          return;
+        }
+
+        const preferredTenantId = localStorage.getItem('taskman_active_tenant') || nextUser?.active_tenant_id || '';
+        const preferredMembership = nextMemberships.find((membership) => membership.tenant_id === preferredTenantId);
+
+        if (preferredMembership && session.tenant?.id === preferredMembership.tenant_id) {
+          setAuthStatus('ready');
+          return;
+        }
+
+        if (preferredMembership) {
+          await setActiveTenant(preferredMembership.tenant_id, { silent: true, userOverride: nextUser });
+          setAuthStatus('ready');
+          return;
+        }
+
+        if (nextMemberships.length === 1) {
+          await setActiveTenant(nextMemberships[0].tenant_id, { silent: true, userOverride: nextUser });
+          setAuthStatus('ready');
+          return;
+        }
+
+        setAuthStatus('picker');
+      } catch (error) {
+        if (!cancelled) showError(error);
+      } finally {
+        if (!cancelled) {
+          setBootstrapReady(true);
+          bootstrappingRef.current = false;
+        }
+      }
+    };
+
+    bootstrap();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, inviteCode, session.apiBase, session.token, setActiveTenant, showError, updateSession]);
+
+  useEffect(() => {
+    if (!session.token || !session.tenant?.id || !isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) return undefined;
 
     const url = `${normalizeApiBase(session.apiBase)}/events/stream?token=${encodeURIComponent(session.token)}`;
     const source = new EventSource(url);
@@ -189,6 +386,7 @@ export function WorkspaceProvider({ children }) {
 
   const logout = useCallback(() => {
     updateSession({ token: null, user: null, tenant: null, apiBase: session.apiBase || DEFAULT_API_BASE });
+    localStorage.removeItem('taskman_active_tenant');
     setProjects([]);
     setIssues([]);
     setSprints([]);
@@ -199,6 +397,9 @@ export function WorkspaceProvider({ children }) {
     setTaskDrawerOpen(false);
     setBoardFilter('ALL');
     setBoardQuickFilter('ALL');
+    setMemberships([]);
+    setAuthStatus('signed_out');
+    setBootstrapReady(true);
   }, [session.apiBase, updateSession]);
 
   const createProject = async (payload) => {
@@ -332,6 +533,8 @@ export function WorkspaceProvider({ children }) {
 
   const value = {
     session, updateSession, api,
+    memberships, authStatus, bootstrapReady,
+    inviteCode, inviteDetails, inviteError,
     page, setPage, mobileNavOpen, setMobileNavOpen,
     toast, loading, eventStatus,
     projects, issues, sprints, members, dashboard,
@@ -344,6 +547,7 @@ export function WorkspaceProvider({ children }) {
     taskDrawerOpen, taskDrawerDefaultStatus, openCreateTaskDrawer, closeCreateTaskDrawer,
     query, setQuery,
     backlogIssues, boardIssues, filteredBoardIssues, visibleIssues,
+    navigate, setActiveTenant, createWorkspace, acceptInvite,
     loadWorkspace, createProject, updateProject, createIssue, updateIssue, deleteIssue, moveIssueStatus,
     createSprint, startSprint, completeSprint, addIssuesToSprint,
     selectedIssue, setSelectedIssue, comments, addComment,

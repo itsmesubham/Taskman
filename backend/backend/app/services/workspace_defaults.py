@@ -50,11 +50,11 @@ def ensure_workspace_invite(tenant_id: str, force_new: bool = False):
         updates.append("invite_regenerated_at = now()")
     elif not tenant.get("invite_created_at"):
         updates.append("invite_created_at = now()")
-    execute_sql = f"UPDATE tenants SET {', '.join(updates)}, updated_at = now() WHERE id = %s RETURNING *"
+    query = f"UPDATE tenants SET {', '.join(updates)}, updated_at = now() WHERE id = %s RETURNING *"
     params.append(tenant_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(execute_sql, params)
+            cur.execute(query, params)
             updated = cur.fetchone()
     return updated
 

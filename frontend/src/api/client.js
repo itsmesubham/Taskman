@@ -1,4 +1,4 @@
-export const DEFAULT_API_BASE = "https://taskman.fnetrix.com/api";
+export const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE_URL || "https://taskman.fnetrix.com/api";
 
 export function normalizeApiBase(value) {
   const raw = (value || DEFAULT_API_BASE).trim();

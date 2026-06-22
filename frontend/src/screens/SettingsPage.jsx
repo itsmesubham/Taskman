@@ -1,6 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
-import { DEFAULT_API_BASE, isSecureApiBase, normalizeApiBase } from '../api/client.js';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { initials } from '../utils.js';
 
@@ -12,18 +11,49 @@ const SHORTCUTS = [
   { keys: 'Tab', action: 'Move through fields' }
 ];
 
+function inviteUrlFromPath(path) {
+  if (!path) return '';
+  if (path.startsWith('http')) return path;
+  return `${window.location.origin}${path}`;
+}
+
 export default function SettingsPage() {
-  const { session, updateSession, members, api, showError, showSuccess, loadWorkspace } = useWorkspace();
-  const [apiBase, setApiBase] = useState(session.apiBase || DEFAULT_API_BASE);
+  const { session, members, memberships, api, showError, showSuccess, loadWorkspace, setActiveTenant, createWorkspace, acceptInvite } = useWorkspace();
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('MEMBER');
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceSlug, setWorkspaceSlug] = useState('');
+  const [inviteInput, setInviteInput] = useState('');
+  const [inviteLink, setInviteLink] = useState('');
+  const [loadingInvite, setLoadingInvite] = useState(false);
   const isAdmin = String(session.user?.role || '').toUpperCase() === 'ADMIN';
+  const isOwner = String(session.user?.role || '').toUpperCase() === 'OWNER';
+  const canManageInvite = isAdmin || isOwner;
 
-  const saveApi = () => {
-    if (!isSecureApiBase(apiBase)) { showError(new Error('Backend API URL must use HTTPS unless it is localhost.')); return; }
-    updateSession({ ...session, apiBase: normalizeApiBase(apiBase) });
-    showSuccess('API URL saved');
-  };
+  useEffect(() => {
+    let cancelled = false;
+    const loadInvite = async () => {
+      if (!session.tenant?.id || !canManageInvite) {
+        setInviteLink('');
+        setLoadingInvite(false);
+        return;
+      }
+      setLoadingInvite(true);
+      try {
+        const result = await api.get(`/tenants/${session.tenant.id}/invite-link`);
+        if (!cancelled) setInviteLink(inviteUrlFromPath(result.invite_url));
+      } catch (error) {
+        if (!cancelled) {
+          setInviteLink('');
+          showError(error);
+        }
+      } finally {
+        if (!cancelled) setLoadingInvite(false);
+      }
+    };
+    loadInvite();
+    return () => { cancelled = true; };
+  }, [api, canManageInvite, session.tenant?.id, showError]);
 
   const addMember = async (event) => {
     event.preventDefault();
@@ -35,26 +65,89 @@ export default function SettingsPage() {
     } catch (error) { showError(error); }
   };
 
+  const copyInvite = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      showSuccess('Invite link copied');
+    } catch {
+      showError(new Error('Unable to copy invite link'));
+    }
+  };
+
+  const regenerateInvite = async () => {
+    try {
+      const result = await api.post(`/tenants/${session.tenant.id}/invite-link/regenerate`, {});
+      setInviteLink(inviteUrlFromPath(result.invite_url));
+      showSuccess('Invite link regenerated');
+    } catch (error) { showError(error); }
+  };
+
+  const revokeInvite = async () => {
+    try {
+      const result = await api.post(`/tenants/${session.tenant.id}/invite-link/revoke`, {});
+      setInviteLink(inviteUrlFromPath(result.invite_url));
+      showSuccess('Invite link revoked');
+    } catch (error) { showError(error); }
+  };
+
+  const createAnotherWorkspace = async (event) => {
+    event.preventDefault();
+    try {
+      await createWorkspace({ name: workspaceName.trim(), ...(workspaceSlug.trim() ? { slug: workspaceSlug.trim() } : {}) });
+    } catch (error) { showError(error); }
+  };
+
+  const joinWorkspace = async (event) => {
+    event.preventDefault();
+    try {
+      const code = inviteInput.trim().replace(/^.*\/(?:invite|join)\//i, '').replace(/^\/+/, '');
+      if (!code) throw new Error('Invite code is required');
+      await acceptInvite(code);
+    } catch (error) { showError(error); }
+  };
+
+  const switchWorkspace = async (tenantId) => {
+    await setActiveTenant(tenantId);
+  };
+
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="Administration" title="Settings" description="Manage API connection, tenant members, and current user context." />
+      <PageHeader eyebrow="Workspace" title="Settings" description="Manage workspace access, invite links, members, and your current user context." />
+
       <div className="two-col">
-        <section className="panel"><div className="panel-head"><h3>Workspace</h3></div><div className="detail-list"><span>Tenant</span><strong>{session.tenant?.name}</strong><span>Slug</span><strong>{session.tenant?.slug}</strong><span>User</span><strong>{session.user?.name}</strong><span>Role</span><strong>{session.user?.role}</strong></div></section>
-        {isAdmin && (
-          <section className="panel">
-            <div className="panel-head">
-              <h3>API connection</h3>
-            </div>
-            <label>
-              Backend API URL
-              <input
-                value={apiBase}
-                onChange={(e) => setApiBase(e.target.value)}
-              />
-            </label>
-            <button className="primary" onClick={saveApi}>Save API URL</button>
-          </section>
-        )}
+        <section className="panel">
+          <div className="panel-head">
+            <h3>Current workspace</h3>
+          </div>
+          <div className="detail-list">
+            <span>Workspace</span><strong>{session.tenant?.name}</strong>
+            <span>Slug</span><strong>{session.tenant?.slug}</strong>
+            <span>User</span><strong>{session.user?.name}</strong>
+            <span>Role</span><strong>{session.user?.role}</strong>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-head">
+            <h3>Workspace invite link</h3>
+            <span>{loadingInvite ? 'Loading' : canManageInvite ? 'Manage' : 'Read only'}</span>
+          </div>
+          {canManageInvite ? (
+            <>
+              <div className="invite-preview">
+                <strong>{inviteLink || 'Invite link unavailable'}</strong>
+                <span>Anyone with this link can request to join this workspace as a member.</span>
+              </div>
+              <div className="form-actions">
+                <button className="ghost" onClick={copyInvite} disabled={!inviteLink}>Copy link</button>
+                <button className="ghost" onClick={regenerateInvite}>Regenerate</button>
+                <button className="danger" onClick={revokeInvite}>Disable link</button>
+              </div>
+            </>
+          ) : (
+            <p className="muted">Invite link management is available to owners and admins.</p>
+          )}
+        </section>
       </div>
 
       <section className="panel">
@@ -62,7 +155,7 @@ export default function SettingsPage() {
           <h3>Members</h3>
           <span>{members.length}</span>
         </div>
-        {isAdmin ? (
+        {isAdmin || isOwner ? (
           <form className="inline-controls wrap" onSubmit={addMember}>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="existing.user@company.com" />
             <select value={role} onChange={(e) => setRole(e.target.value)}><option>ADMIN</option><option>MEMBER</option><option>VIEWER</option></select>
@@ -71,7 +164,71 @@ export default function SettingsPage() {
         ) : (
           <p className="muted">Member management is available to admins only.</p>
         )}
-        <div className="member-grid">{members.map((member) => <div className="member-card" key={member.id}><div className="avatar">{initials(member.name)}</div><div><strong>{member.name}</strong><span>{member.email}</span></div><em>{member.role}</em></div>)}</div>
+        <div className="member-grid">
+          {members.map((member) => (
+            <div className="member-card" key={member.id}>
+              <div className="avatar">{initials(member.name)}</div>
+              <div>
+                <strong>{member.name}</strong>
+                <span>{member.email}</span>
+              </div>
+              <em>{member.role}</em>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="two-col">
+        <section className="panel">
+          <div className="panel-head">
+            <h3>Create another workspace</h3>
+            <span>Optional</span>
+          </div>
+          <form className="form-stack" onSubmit={createAnotherWorkspace}>
+            <label>
+              Workspace name
+              <input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} placeholder="Grabbit" />
+            </label>
+            <label>
+              Workspace slug or key
+              <input value={workspaceSlug} onChange={(e) => setWorkspaceSlug(e.target.value)} placeholder="grabbit" />
+            </label>
+            <button className="primary">Create workspace</button>
+          </form>
+        </section>
+
+        <section className="panel">
+          <div className="panel-head">
+            <h3>Join another workspace</h3>
+            <span>Invite URL</span>
+          </div>
+          <form className="form-stack" onSubmit={joinWorkspace}>
+            <label>
+              Invite URL or code
+              <input value={inviteInput} onChange={(e) => setInviteInput(e.target.value)} placeholder="https://taskman.fnetrix.com/invite/..." />
+            </label>
+            <button className="primary">Join workspace</button>
+          </form>
+        </section>
+      </div>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h3>Switch workspace</h3>
+          <span>{memberships.length} available</span>
+        </div>
+        <div className="member-grid">
+          {memberships.map((membership) => (
+            <button key={membership.tenant_id} type="button" className="member-card" onClick={() => switchWorkspace(membership.tenant_id)}>
+              <div className="avatar">{initials(membership.tenant_name)}</div>
+              <div>
+                <strong>{membership.tenant_name}</strong>
+                <span>{membership.tenant_slug}</span>
+              </div>
+              <em>{membership.role}</em>
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="panel">

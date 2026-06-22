@@ -1,111 +1,161 @@
-import { useCallback, useEffect, useState } from 'react';
-import { DEFAULT_API_BASE, isSecureApiBase, normalizeApiBase } from '../api/client.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { DEFAULT_API_BASE, ApiClient } from '../api/client.js';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 
 export default function AuthScreen() {
-  const { session, updateSession } = useWorkspace();
+  const { updateSession, inviteCode } = useWorkspace();
   const [mode, setMode] = useState('login');
-  const [tenantMode, setTenantMode] = useState('existing');
-  const [apiBase, setApiBase] = useState(session.apiBase || DEFAULT_API_BASE);
-  const [tenants, setTenants] = useState([]);
-  const [tenantSearch, setTenantSearch] = useState('');
-  const [tenantId, setTenantId] = useState('');
-  const [tenantName, setTenantName] = useState('');
-  const [name, setName] = useState('');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-
-  const request = async (path, options = {}) => {
-    if (!isSecureApiBase(apiBase)) throw new Error('Backend API URL must use HTTPS unless it is localhost.');
-    const response = await fetch(`${normalizeApiBase(apiBase)}${path}`, {
-      ...options,
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-      body: options.body ? JSON.stringify(options.body) : undefined
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || 'Request failed');
-    return data;
-  };
-
-  const loadTenants = useCallback(async () => {
-    try {
-      const suffix = tenantSearch.trim() ? `?search=${encodeURIComponent(tenantSearch.trim())}` : '';
-      const result = await request(`/tenants${suffix}`);
-      setTenants(result.tenants || []);
-      if (!tenantId && result.tenants?.[0]) setTenantId(result.tenants[0].id);
-    } catch (err) {
-      setError(err.message);
-    }
-  }, [apiBase, tenantSearch, tenantId]);
+  const emailRef = useRef(null);
+  const nameRef = useRef(null);
+  const authClient = useRef(new ApiClient(() => ({ token: null, apiBase: DEFAULT_API_BASE }))).current;
 
   useEffect(() => {
-    const timer = window.setTimeout(loadTenants, 250);
-    return () => window.clearTimeout(timer);
-  }, [loadTenants]);
+    window.requestAnimationFrame(() => {
+      if (mode === 'login') {
+        emailRef.current?.focus();
+      } else {
+        nameRef.current?.focus();
+      }
+    });
+  }, [mode]);
 
-  const submit = async (event) => {
+  const submit = useCallback(async (event) => {
     event.preventDefault();
     setError('');
+    if (mode === 'signup' && password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
     setBusy(true);
     try {
       const payload = mode === 'login'
-        ? { tenant_id: tenantId, email, password }
-        : { name, email, password, ...(tenantMode === 'new' ? { tenant_name: tenantName } : { tenant_id: tenantId }) };
-      const result = await request(mode === 'login' ? '/auth/login' : '/auth/signup', { method: 'POST', body: payload });
-      updateSession({ apiBase: normalizeApiBase(apiBase), token: result.access_token, user: result.user, tenant: result.tenant });
+        ? { email, password }
+        : { name: fullName, email, password };
+      const result = await authClient.post(mode === 'login' ? '/auth/login' : '/auth/signup', payload);
+      updateSession({
+        apiBase: DEFAULT_API_BASE,
+        token: result.access_token,
+        user: result.user,
+        tenant: null
+      });
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
-  };
+  }, [authClient, confirmPassword, email, fullName, mode, password, updateSession]);
 
   return (
     <div className="auth-layout">
       <section className="auth-hero">
+        <div className="auth-hero-grid" />
         <div className="hero-orb hero-orb-a" />
         <div className="hero-orb hero-orb-b" />
         <div className="hero-gridline" />
-        <div className="brand-mark">T</div>
-        <p className="eyebrow">Taskman for business teams</p>
-        <h1>Plan work, manage sprints, and keep every tenant isolated.</h1>
-        <p className="hero-copy">An enterprise workspace for product, engineering, operations, and leadership teams that need delivery clarity without Jira complexity.</p>
-        <div className="hero-grid">
-          <div><strong>Realtime</strong><span>SSE workspace sync</span></div>
-          <div><strong>Agile</strong><span>Backlog + sprints</span></div>
-          <div><strong>Secure</strong><span>Tenant isolation</span></div>
+        <div className="auth-hero-content">
+          <div className="brand-mark">T</div>
+          <p className="eyebrow">TASKMAN FOR MODERN TEAMS</p>
+          <h1>Plan work. Ship faster. Stay in sync.</h1>
+          <p className="hero-copy">Taskman helps teams manage tasks, sprints, priorities, and ownership without Jira complexity.</p>
+          <div className="hero-pills">
+            <span>Realtime board sync</span>
+            <span>Monthly auto-sprints</span>
+            <span>Tenant-isolated workspaces</span>
+            <span>Fast task creation</span>
+            <span>Team assignments</span>
+            <span>Reports & tracking</span>
+          </div>
+        </div>
+        <div className="floating-stack">
+          <div className="floating-card floating-card-a">
+            <strong>Q2 Launch</strong>
+            <span>12 tasks moved today</span>
+          </div>
+          <div className="floating-card floating-card-b">
+            <strong>June Sprint</strong>
+            <span>On track · 84% complete</span>
+          </div>
+          <div className="floating-card floating-card-c">
+            <strong>Design Review</strong>
+            <span>3 items waiting for approval</span>
+          </div>
         </div>
       </section>
 
       <section className="auth-card">
         <div className="auth-card-glow" />
         <div className="auth-tabs">
-          <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Login</button>
-          <button type="button" className={mode === 'signup' ? 'active' : ''} onClick={() => setMode('signup')}>Signup</button>
+          <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setConfirmPassword(''); }}>Login</button>
+          <button type="button" className={mode === 'signup' ? 'active' : ''} onClick={() => { setMode('signup'); setConfirmPassword(''); }}>Signup</button>
         </div>
 
+        {inviteCode && (
+          <div className="invite-preview auth-invite-note">
+            <strong>Invite link detected</strong>
+            <span>Sign in to continue joining your workspace.</span>
+          </div>
+        )}
+
         <form onSubmit={submit} className="form-stack">
-          <label>Backend API URL<input value={apiBase} onChange={(event) => setApiBase(event.target.value)} placeholder="http://localhost:8080/api" /></label>
-          <label>Find tenant<input value={tenantSearch} onChange={(event) => setTenantSearch(event.target.value)} placeholder="Search tenant" /></label>
-
           {mode === 'signup' && (
-            <div className="segmented">
-              <button type="button" className={tenantMode === 'existing' ? 'active' : ''} onClick={() => setTenantMode('existing')}>Join existing</button>
-              <button type="button" className={tenantMode === 'new' ? 'active' : ''} onClick={() => setTenantMode('new')}>Create tenant</button>
-            </div>
+            <label>
+              Full name
+              <input
+                ref={nameRef}
+                value={fullName}
+                onChange={(event) => setFullName(event.target.value)}
+                placeholder="Your name"
+                autoComplete="name"
+                required
+              />
+            </label>
           )}
-
-          {(mode === 'login' || tenantMode === 'existing') && (
-            <label>Tenant<select value={tenantId} onChange={(event) => setTenantId(event.target.value)} required><option value="">Select tenant</option>{tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></label>
+          <label>
+            Email
+            <input
+              ref={emailRef}
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@company.com"
+              autoComplete="email"
+              required
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Minimum 6 characters"
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              required
+              minLength={6}
+            />
+          </label>
+          {mode === 'signup' && (
+            <label>
+              Confirm password
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                placeholder="Repeat your password"
+                autoComplete="new-password"
+                required
+                minLength={6}
+              />
+            </label>
           )}
-          {mode === 'signup' && tenantMode === 'new' && <label>New tenant name<input value={tenantName} onChange={(event) => setTenantName(event.target.value)} placeholder="Acme Operations" required /></label>}
-          {mode === 'signup' && <label>Full name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" required /></label>}
-          <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" required /></label>
-          <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Minimum 6 characters" required minLength={6} /></label>
           {error && <div className="inline-error">{error}</div>}
-          <button className="primary full" disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Login to workspace' : 'Create account'}</button>
+          <button className="primary full auth-submit" disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Login to workspace' : 'Create account'}</button>
         </form>
       </section>
     </div>
