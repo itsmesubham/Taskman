@@ -1,4 +1,4 @@
-# Taskman React UI Fixed
+# Taskman - A jira like taskmanager for enterprise
 
 Responsive React/Vite UI for Taskman.
 
