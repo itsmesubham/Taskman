@@ -56,7 +56,6 @@ def execute(query: str, params: tuple = ()):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
-            try:
+            if cur.description:
                 return cur.fetchone()
-            except Exception:
-                return None
+            return None

@@ -40,7 +40,8 @@ def dashboard(current_user: dict = Depends(get_current_user), project_id: str | 
     projects = fetch_one("SELECT COUNT(*) AS total_projects FROM projects WHERE tenant_id = %s AND status != 'ARCHIVED'", (tenant_id,))
     active_sprints = fetch_all(
         """
-        SELECT s.*, p.key AS project_key,
+        SELECT s.id, s.tenant_id, s.project_id, s.name, s.goal, s.status, s.start_date, s.end_date, s.created_at, s.updated_at,
+               p.key AS project_key,
                COUNT(i.id) AS issue_count,
                COUNT(i.id) FILTER (WHERE i.status = 'DONE') AS done_count
         FROM sprints s
@@ -90,7 +91,7 @@ def dashboard(current_user: dict = Depends(get_current_user), project_id: str | 
 @router.get("/sprint/{sprint_id}")
 def sprint_report(sprint_id: str, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
-    sprint = fetch_one("SELECT * FROM sprints WHERE id = %s AND tenant_id = %s", (sprint_id, tenant_id))
+    sprint = fetch_one("SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_at, updated_at FROM sprints WHERE id = %s AND tenant_id = %s", (sprint_id, tenant_id))
     if not sprint:
         raise HTTPException(status_code=404, detail="Sprint not found")
     summary = fetch_one(

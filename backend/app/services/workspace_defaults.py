@@ -29,7 +29,10 @@ def _generate_invite_code() -> str:
 
 
 def ensure_workspace_invite(tenant_id: str, force_new: bool = False):
-    tenant = fetch_one("SELECT * FROM tenants WHERE id = %s", (tenant_id,))
+    tenant = fetch_one(
+        "SELECT id, name, slug, invite_code, invite_enabled, invite_created_at FROM tenants WHERE id = %s",
+        (tenant_id,),
+    )
     if not tenant:
         return None
 
@@ -40,26 +43,37 @@ def ensure_workspace_invite(tenant_id: str, force_new: bool = False):
     if invite_code and not invite_enabled and not force_new:
         return tenant
 
-    code = _generate_invite_code()
-    while fetch_one("SELECT id FROM tenants WHERE invite_code = %s", (code,)):
-        code = _generate_invite_code()
-
     updates = ["invite_code = %s", "invite_enabled = true"]
-    params: list[object] = [code]
     if force_new:
         updates.append("invite_regenerated_at = now()")
     elif not tenant.get("invite_created_at"):
         updates.append("invite_created_at = now()")
     execute_sql = f"UPDATE tenants SET {', '.join(updates)}, updated_at = now() WHERE id = %s RETURNING *"
-    params.append(tenant_id)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(execute_sql, params)
-            updated = cur.fetchone()
-    return updated
+
+    for _ in range(5):
+        code = _generate_invite_code()
+        while fetch_one("SELECT id FROM tenants WHERE invite_code = %s", (code,)):
+            code = _generate_invite_code()
+
+        params: list[object] = [code, tenant_id]
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(execute_sql, params)
+                    updated = cur.fetchone()
+            if updated:
+                return updated
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) == "23505":
+                continue
+            raise
+
+    raise RuntimeError("Unable to allocate a unique workspace invite code")
 
 
 def invite_url_for_tenant(tenant: dict) -> str:
+    if not tenant.get("invite_enabled", True):
+        return ""
     invite_code = (tenant.get("invite_code") or "").strip()
     if not invite_code and tenant.get("invite_enabled", True):
         tenant = ensure_workspace_invite(str(tenant["id"])) or tenant
@@ -74,7 +88,7 @@ def ensure_default_project(tenant_id: str):
     tenant_name = (tenant["name"] if tenant else "Workspace").strip() or "Workspace"
     default_key = project_key(tenant_name)
     existing = fetch_one(
-        "SELECT * FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1",
+        "SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1",
         (tenant_id, default_key),
     )
     if existing:
@@ -102,7 +116,7 @@ def ensure_default_project(tenant_id: str):
             if project:
                 return project
             cur.execute(
-                "SELECT * FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1",
+                "SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1",
                 (tenant_id, default_key),
             )
             project = cur.fetchone()
@@ -130,7 +144,8 @@ def ensure_current_monthly_sprint(tenant_id: str, project_id: str):
             )
             cur.execute(
                 """
-                SELECT * FROM sprints
+                SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at
+                FROM sprints
                 WHERE tenant_id = %s AND project_id = %s AND start_date = %s AND end_date = %s
                 ORDER BY created_at ASC
                 LIMIT 1
@@ -167,7 +182,8 @@ def ensure_current_monthly_sprint(tenant_id: str, project_id: str):
                 return sprint
             cur.execute(
                 """
-                SELECT * FROM sprints
+                SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at
+                FROM sprints
                 WHERE tenant_id = %s AND project_id = %s AND start_date = %s AND end_date = %s
                 ORDER BY created_at ASC
                 LIMIT 1
@@ -189,7 +205,7 @@ def ensure_workspace_board_defaults(tenant_id: str):
 def get_workspace_sprint_schedule(tenant_id: str, project_id: str | None = None):
     project = None
     if project_id:
-        project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+        project = fetch_one("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
     if not project:
         project = ensure_default_project(tenant_id)
 
@@ -201,7 +217,8 @@ def get_workspace_sprint_schedule(tenant_id: str, project_id: str | None = None)
 
     last_created_sprint = fetch_one(
         """
-        SELECT * FROM sprints
+        SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at
+        FROM sprints
         WHERE tenant_id = %s AND project_id = %s
         ORDER BY created_at DESC
         LIMIT 1
@@ -210,7 +227,8 @@ def get_workspace_sprint_schedule(tenant_id: str, project_id: str | None = None)
     )
     upcoming = fetch_one(
         """
-        SELECT * FROM sprints
+        SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at
+        FROM sprints
         WHERE tenant_id = %s AND project_id = %s AND start_date > %s
         ORDER BY start_date ASC
         LIMIT 1

@@ -124,6 +124,18 @@ class WorkspaceBootstrapTests(unittest.TestCase):
     @patch("app.security.memberships_for_user")
     @patch("app.security.fetch_one")
     @patch("app.security.decode_token")
+    def test_get_current_user_uses_active_tenant_without_membership_lookup(self, mock_decode, mock_fetch_one, mock_memberships_for_user):
+        mock_decode.return_value = {"sub": "user-1", "tenant_id": "tenant-1"}
+        mock_fetch_one.return_value = {"id": "user-1", "name": "Ada", "email": "ada@example.com", "active_tenant_id": "tenant-1", "tenant_id": "tenant-1", "role": "OWNER", "tenant_name": "Grabbit", "tenant_slug": "grabbit"}
+        request = SimpleNamespace(query_params={"token": "test-token"})
+        current_user = get_current_user(request, credentials=None)
+        self.assertEqual(current_user["tenant_id"], "tenant-1")
+        self.assertEqual(current_user["role"], "OWNER")
+        mock_memberships_for_user.assert_not_called()
+
+    @patch("app.security.memberships_for_user")
+    @patch("app.security.fetch_one")
+    @patch("app.security.decode_token")
     def test_get_current_user_with_multiple_memberships_skips_extra_lookup(self, mock_decode, mock_fetch_one, mock_memberships_for_user):
         mock_decode.return_value = {"sub": "user-1"}
         mock_fetch_one.return_value = {"id": "user-1", "name": "Ada", "email": "ada@example.com", "active_tenant_id": None, "tenant_id": None, "role": None, "tenant_name": None, "tenant_slug": None}
@@ -334,7 +346,7 @@ class WorkspaceBootstrapTests(unittest.TestCase):
             normalized = " ".join(query.split()).lower()
             if normalized.startswith("insert into projects"):
                 return None
-            if normalized.startswith("select * from projects where tenant_id = %s and key = %s limit 1"):
+            if normalized.startswith("select id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at from projects where tenant_id = %s and key = %s limit 1"):
                 return project_row
             return None
 

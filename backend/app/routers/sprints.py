@@ -44,14 +44,20 @@ def resolve_tenant_id(current_user: dict) -> str:
 
 
 def ensure_project(project_id: str, tenant_id: str):
-    project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+    project = fetch_one(
+        "SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s",
+        (project_id, tenant_id),
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
 
 def ensure_sprint(sprint_id: str, tenant_id: str):
-    sprint = fetch_one("SELECT * FROM sprints WHERE id = %s AND tenant_id = %s", (sprint_id, tenant_id))
+    sprint = fetch_one(
+        "SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at FROM sprints WHERE id = %s AND tenant_id = %s",
+        (sprint_id, tenant_id),
+    )
     if not sprint:
         raise HTTPException(status_code=404, detail="Sprint not found")
     return sprint
@@ -72,7 +78,8 @@ def list_sprints(current_user: dict = Depends(get_current_user), project_id: str
         params.append(status)
     rows = fetch_all(
         f"""
-        SELECT s.*, p.key AS project_key, p.name AS project_name,
+        SELECT s.id, s.tenant_id, s.project_id, s.name, s.goal, s.status, s.start_date, s.end_date, s.created_by, s.issue_count, s.created_at, s.updated_at,
+               p.key AS project_key, p.name AS project_name,
                COUNT(i.id) AS issue_count,
                COUNT(i.id) FILTER (WHERE i.status = 'DONE') AS done_count,
                COALESCE(SUM(i.story_points), 0) AS total_points,
@@ -117,7 +124,10 @@ async def create_sprint(payload: SprintCreate, current_user: dict = Depends(get_
 def get_sprint(sprint_id: str, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
     sprint = ensure_sprint(sprint_id, tenant_id)
-    issues = fetch_all("SELECT * FROM issues WHERE sprint_id = %s AND tenant_id = %s ORDER BY position ASC", (sprint_id, tenant_id))
+    issues = fetch_all(
+        "SELECT id, tenant_id, project_id, sprint_id, issue_key, title, description, issue_type, status, priority, assignee_id, reporter_id, story_points, due_date, labels, position, created_at, updated_at FROM issues WHERE sprint_id = %s AND tenant_id = %s ORDER BY position ASC",
+        (sprint_id, tenant_id),
+    )
     return {"sprint": row_to_json(sprint), "issues": rows_to_json(issues)}
 
 

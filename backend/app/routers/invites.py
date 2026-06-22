@@ -26,7 +26,10 @@ def _invite_payload(tenant):
 
 @router.get("/{invite_code}")
 def get_invite(invite_code: str):
-    tenant = fetch_one("SELECT * FROM tenants WHERE invite_code = %s", (invite_code,))
+    tenant = fetch_one(
+        "SELECT id, name, slug, invite_code, invite_enabled FROM tenants WHERE invite_code = %s",
+        (invite_code,),
+    )
     if not tenant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite link not found")
     if not tenant.get("invite_enabled", True):
@@ -36,14 +39,17 @@ def get_invite(invite_code: str):
 
 @router.post("/{invite_code}/accept")
 def accept_invite(invite_code: str, current_user: dict = Depends(get_current_user)):
-    tenant = fetch_one("SELECT * FROM tenants WHERE invite_code = %s", (invite_code,))
+    tenant = fetch_one(
+        "SELECT id, name, slug, invite_code, invite_enabled FROM tenants WHERE invite_code = %s",
+        (invite_code,),
+    )
     if not tenant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite link not found")
     if not tenant.get("invite_enabled", True):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invite link is disabled")
 
     existing_membership = fetch_one(
-        "SELECT * FROM tenant_members WHERE tenant_id = %s AND user_id = %s",
+        "SELECT tenant_id, user_id, role, status FROM tenant_members WHERE tenant_id = %s AND user_id = %s",
         (tenant["id"], current_user["id"]),
     )
     membership = existing_membership

@@ -25,7 +25,7 @@ class IssueCreate(BaseModel):
     assignee_id: str | None = None
     story_points: int = Field(default=0, ge=0, le=100)
     due_date: str | None = None
-    labels: list[str] = []
+    labels: list[str] = Field(default_factory=list)
 
 
 class IssueUpdate(BaseModel):
@@ -80,14 +80,20 @@ def resolve_tenant_id(current_user: dict) -> str:
 
 
 def ensure_project(project_id: str, tenant_id: str):
-    project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+    project = fetch_one(
+        "SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s",
+        (project_id, tenant_id),
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
 
 def ensure_issue(issue_id: str, tenant_id: str):
-    issue = fetch_one("SELECT * FROM issues WHERE id = %s AND tenant_id = %s", (issue_id, tenant_id))
+    issue = fetch_one(
+        "SELECT id, tenant_id, project_id, sprint_id, issue_key, title, description, issue_type, status, priority, assignee_id, reporter_id, story_points, due_date, labels, position, created_at, updated_at FROM issues WHERE id = %s AND tenant_id = %s",
+        (issue_id, tenant_id),
+    )
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
     return issue
@@ -96,7 +102,10 @@ def ensure_issue(issue_id: str, tenant_id: str):
 def ensure_sprint(sprint_id: str | None, tenant_id: str, project_id: str):
     if not sprint_id:
         return None
-    sprint = fetch_one("SELECT * FROM sprints WHERE id = %s AND tenant_id = %s AND project_id = %s", (sprint_id, tenant_id, project_id))
+    sprint = fetch_one(
+        "SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at FROM sprints WHERE id = %s AND tenant_id = %s AND project_id = %s",
+        (sprint_id, tenant_id, project_id),
+    )
     if not sprint:
         raise HTTPException(status_code=404, detail="Sprint not found")
     return sprint
@@ -134,7 +143,9 @@ def list_issues(
         params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
     rows = fetch_all(
         f"""
-        SELECT i.*, p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
+        SELECT i.id, i.tenant_id, i.project_id, i.sprint_id, i.issue_key, i.title, i.description, i.issue_type, i.status, i.priority,
+               i.assignee_id, i.reporter_id, i.story_points, i.due_date, i.labels, i.position, i.created_at, i.updated_at,
+               p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
         FROM issues i
         JOIN projects p ON p.id = i.project_id
         LEFT JOIN users au ON au.id = i.assignee_id
@@ -226,7 +237,9 @@ def get_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
     issue = fetch_one(
         """
-        SELECT i.*, p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
+        SELECT i.id, i.tenant_id, i.project_id, i.sprint_id, i.issue_key, i.title, i.description, i.issue_type, i.status, i.priority,
+               i.assignee_id, i.reporter_id, i.story_points, i.due_date, i.labels, i.position, i.created_at, i.updated_at,
+               p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
         FROM issues i
         JOIN projects p ON p.id = i.project_id
         LEFT JOIN users au ON au.id = i.assignee_id

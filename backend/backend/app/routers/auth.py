@@ -38,7 +38,7 @@ def signup(payload: SignupRequest):
     email = normalize_email(payload.email)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+            cur.execute("SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s", (email,))
             user = cur.fetchone()
             if user:
                 if not verify_password(payload.password, user["password_hash"]):
@@ -63,7 +63,7 @@ def signup(payload: SignupRequest):
 def login(payload: LoginRequest):
     email = normalize_email(payload.email)
     row = fetch_one(
-        "SELECT * FROM users WHERE email = %s",
+        "SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s",
         (email,),
     )
     if not row or not verify_password(payload.password, row["password_hash"]):

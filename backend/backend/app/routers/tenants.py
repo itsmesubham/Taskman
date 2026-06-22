@@ -122,7 +122,7 @@ def current_tenant(current_user: dict = Depends(get_current_user)):
     tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
     if not tenant_id:
         raise HTTPException(status_code=404, detail="No active workspace")
-    tenant = fetch_one("SELECT * FROM tenants WHERE id = %s", (tenant_id,))
+    tenant = fetch_one("SELECT id, name, slug, invite_code, invite_enabled, invite_created_at, invite_regenerated_at FROM tenants WHERE id = %s", (tenant_id,))
     return {"tenant": row_to_json(tenant)}
 
 

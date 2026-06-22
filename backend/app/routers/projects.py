@@ -34,9 +34,9 @@ def resolve_tenant_id(current_user: dict) -> str:
 def list_projects(current_user: dict = Depends(get_current_user), include_archived: bool = False):
     tenant_id = resolve_tenant_id(current_user)
     if include_archived:
-        rows = fetch_all("SELECT * FROM projects WHERE tenant_id = %s ORDER BY created_at DESC", (tenant_id,))
+        rows = fetch_all("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s ORDER BY created_at DESC", (tenant_id,))
     else:
-        rows = fetch_all("SELECT * FROM projects WHERE tenant_id = %s AND status != 'ARCHIVED' ORDER BY created_at DESC", (tenant_id,))
+        rows = fetch_all("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s AND status != 'ARCHIVED' ORDER BY created_at DESC", (tenant_id,))
     return {"projects": rows_to_json(rows)}
 
 
@@ -59,7 +59,7 @@ async def create_project(payload: ProjectCreate, current_user: dict = Depends(ge
                 )
                 project = cur.fetchone()
                 if not project:
-                    cur.execute("SELECT * FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1", (tenant_id, key))
+                    cur.execute("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1", (tenant_id, key))
                     project = cur.fetchone()
     except Exception as exc:
         code = getattr(exc, "sqlstate", None)
@@ -76,7 +76,7 @@ async def create_project(payload: ProjectCreate, current_user: dict = Depends(ge
 @router.get("/{project_id}")
 def get_project(project_id: str, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
-    project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+    project = fetch_one("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"project": row_to_json(project)}
@@ -85,7 +85,7 @@ def get_project(project_id: str, current_user: dict = Depends(get_current_user))
 @router.patch("/{project_id}")
 async def update_project(project_id: str, payload: ProjectUpdate, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
-    project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+    project = fetch_one("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if current_user["role"] not in ("OWNER", "ADMIN") and project.get("created_by") != current_user["id"]:
@@ -110,7 +110,7 @@ async def update_project(project_id: str, payload: ProjectUpdate, current_user: 
 @router.delete("/{project_id}")
 async def archive_project(project_id: str, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
-    project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+    project = fetch_one("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if current_user["role"] not in ("OWNER", "ADMIN") and project.get("created_by") != current_user["id"]:
