@@ -52,7 +52,7 @@ export default function BoardToolbar() {
           </select>
         </div>
         <SavedViewsMenu />
-        <button type="button" className="ghost" onClick={() => loadWorkspace()}>{loading ? 'Syncing...' : 'Refresh'}</button>
+        <button type="button" className="ghost" onClick={() => loadWorkspace(false, true)}>{loading ? 'Syncing...' : 'Refresh'}</button>
       </div>
     </section>
   );

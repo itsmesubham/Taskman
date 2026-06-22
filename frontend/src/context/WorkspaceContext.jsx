@@ -10,19 +10,19 @@ export function WorkspaceProvider({ children }) {
       token: null,
       user: null,
       tenant: null,
+      memberships: [],
       apiBase: DEFAULT_API_BASE
     });
-    if (!persisted?.token) return persisted;
     return {
       ...persisted,
-      tenant: null
+      memberships: persisted.memberships || []
     };
   });
   const [page, setPage] = useState('board');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [eventStatus, setEventStatus] = useState('offline');
+  const [eventStatus, setEventStatus] = useState('syncing');
 
   const [projects, setProjects] = useState([]);
   const [issues, setIssues] = useState([]);
@@ -53,6 +53,7 @@ export function WorkspaceProvider({ children }) {
   const refreshTimer = useRef(null);
   const bootstrappingRef = useRef(false);
   const workspaceLoadRef = useRef(false);
+  const workspaceLoadedTenantRef = useRef('');
 
   const updateSession = useCallback((next) => {
     setSession(next);
@@ -66,11 +67,14 @@ export function WorkspaceProvider({ children }) {
   const getApiState = useCallback(() => ({ token: session.token, apiBase: session.apiBase || DEFAULT_API_BASE }), [session.apiBase, session.token]);
   const handleUnauthorized = useCallback(() => {
     showToast('error', 'Session expired. Please login again.');
-    updateSession({ ...session, token: null, user: null, tenant: null });
+    updateSession({ ...session, token: null, user: null, tenant: null, memberships: [] });
     localStorage.removeItem('taskman_active_tenant');
     setMemberships([]);
     setAuthStatus('signed_out');
     setBootstrapReady(true);
+    setEventStatus('offline');
+    workspaceLoadedTenantRef.current = '';
+    workspaceLoadRef.current = false;
   }, [session, showToast, updateSession]);
   const api = useMemo(() => new ApiClient(getApiState, handleUnauthorized), [getApiState, handleUnauthorized]);
   const publicApi = useMemo(() => new ApiClient(() => ({ token: null, apiBase: session.apiBase || DEFAULT_API_BASE })), [session.apiBase]);
@@ -145,6 +149,7 @@ export function WorkspaceProvider({ children }) {
       token: result.access_token || session.token,
       user: nextUser,
       tenant: nextTenant,
+      memberships: result.memberships || memberships,
       apiBase: session.apiBase || DEFAULT_API_BASE
     };
     localStorage.setItem('taskman_active_tenant', tenantId || '');
@@ -169,6 +174,7 @@ export function WorkspaceProvider({ children }) {
       token: result.access_token || session.token,
       user: nextUser,
       tenant: nextTenant,
+      memberships: result.memberships || (result.membership ? [result.membership] : memberships),
       apiBase: session.apiBase || DEFAULT_API_BASE
     });
     setMemberships(result.memberships || (result.membership ? [result.membership] : memberships));
@@ -190,6 +196,7 @@ export function WorkspaceProvider({ children }) {
       token: result.access_token || session.token,
       user: nextUser,
       tenant: nextTenant,
+      memberships: result.memberships || memberships,
       apiBase: session.apiBase || DEFAULT_API_BASE
     });
     setMemberships(result.memberships || memberships);
@@ -207,14 +214,17 @@ export function WorkspaceProvider({ children }) {
     setTaskDrawerOpen(false);
   }, []);
 
-  const loadWorkspace = useCallback(async (silent = false) => {
-    if (!session.token || !session.tenant?.id) return;
+  const loadWorkspace = useCallback(async (silent = false, force = false) => {
+    const tenantId = session.tenant?.id || '';
+    if (!session.token || !tenantId) return;
     if (!isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) {
       showError(new Error('Backend API URL must use HTTPS unless it is localhost.'));
       return;
     }
+    if (!force && workspaceLoadedTenantRef.current === tenantId) return;
     if (workspaceLoadRef.current) return;
     workspaceLoadRef.current = true;
+    workspaceLoadedTenantRef.current = tenantId;
     if (!silent) setLoading(true);
     try {
       const [defaultsRes, scheduleRes, projectRes, sprintRes, issueRes, reportRes] = await Promise.all([
@@ -254,7 +264,10 @@ export function WorkspaceProvider({ children }) {
     }
   }, [api, session.apiBase, session.tenant?.id, session.token, setActiveProjectId, showError]);
 
-  useEffect(() => { loadWorkspace(); }, [loadWorkspace]);
+  useEffect(() => {
+    if (!session.token || !session.tenant?.id) return;
+    loadWorkspace();
+  }, [loadWorkspace, session.token, session.tenant?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -269,6 +282,11 @@ export function WorkspaceProvider({ children }) {
       bootstrappingRef.current = true;
       setBootstrapReady(false);
       try {
+        if (session.tenant?.id && Array.isArray(session.memberships) && session.memberships.length > 0) {
+          setMemberships(session.memberships);
+          setAuthStatus(inviteCode ? 'invite' : 'ready');
+          return;
+        }
         const [meRes, myRes] = await Promise.all([
           api.get('/users/me'),
           api.get('/tenants/my')
@@ -281,6 +299,7 @@ export function WorkspaceProvider({ children }) {
           ...session,
           user: nextUser || session.user,
           tenant: session.tenant || null,
+          memberships: nextMemberships,
           apiBase: session.apiBase || DEFAULT_API_BASE
         });
 
@@ -295,25 +314,23 @@ export function WorkspaceProvider({ children }) {
         }
 
         const preferredTenantId = localStorage.getItem('taskman_active_tenant') || nextUser?.active_tenant_id || '';
-        const preferredMembership = nextMemberships.find((membership) => membership.tenant_id === preferredTenantId);
-        const fallbackMembership = nextMemberships[0] || null;
-        const activeMembership = preferredMembership || fallbackMembership;
-
-        if (activeMembership) {
+        const preferredMembership = nextMemberships.find((membership) => membership.tenant_id === preferredTenantId) || nextMemberships[0] || null;
+        if (preferredMembership) {
           const activeTenant = {
-            id: activeMembership.tenant_id,
-            name: activeMembership.tenant_name || 'Workspace',
-            slug: activeMembership.tenant_slug || '',
+            id: preferredMembership.tenant_id,
+            name: preferredMembership.tenant_name || 'Workspace',
+            slug: preferredMembership.tenant_slug || '',
           };
-          localStorage.setItem('taskman_active_tenant', activeMembership.tenant_id || '');
+          localStorage.setItem('taskman_active_tenant', preferredMembership.tenant_id || '');
           updateSession({
             ...session,
             user: {
               ...(nextUser || session.user || {}),
-              role: activeMembership.role || nextUser?.role || session.user?.role,
-              active_tenant_id: activeMembership.tenant_id
+              role: preferredMembership.role || nextUser?.role || session.user?.role,
+              active_tenant_id: preferredMembership.tenant_id
             },
             tenant: activeTenant,
+            memberships: nextMemberships,
             apiBase: session.apiBase || DEFAULT_API_BASE
           });
           setMemberships(nextMemberships);
@@ -346,28 +363,16 @@ export function WorkspaceProvider({ children }) {
 
     const url = `${normalizeApiBase(session.apiBase)}/events/stream?token=${encodeURIComponent(session.token)}`;
     const source = new EventSource(url);
-    setEventStatus('connecting');
-
-    const scheduleRefresh = () => {
-      window.clearTimeout(refreshTimer.current);
-      refreshTimer.current = window.setTimeout(() => loadWorkspace(true), 300);
-    };
+    setEventStatus('syncing');
 
     source.addEventListener('connected', () => setEventStatus('live'));
     source.addEventListener('heartbeat', () => setEventStatus('live'));
-    source.onerror = () => setEventStatus('reconnecting');
-
-    [
-      'project_created', 'project_updated', 'project_archived',
-      'issue_created', 'issue_updated', 'issue_deleted', 'issues_reordered',
-      'sprint_created', 'sprint_updated', 'sprint_started', 'sprint_completed',
-      'issues_added_to_sprint', 'comment_created', 'member_added'
-    ].forEach((eventName) => source.addEventListener(eventName, scheduleRefresh));
+    source.onerror = () => setEventStatus('syncing');
 
     return () => {
       window.clearTimeout(refreshTimer.current);
       source.close();
-      setEventStatus('offline');
+      setEventStatus('syncing');
     };
   }, [loadWorkspace, session.apiBase, session.token]);
 
@@ -412,7 +417,7 @@ export function WorkspaceProvider({ children }) {
   });
 
   const logout = useCallback(() => {
-    updateSession({ token: null, user: null, tenant: null, apiBase: session.apiBase || DEFAULT_API_BASE });
+    updateSession({ token: null, user: null, tenant: null, memberships: [], apiBase: session.apiBase || DEFAULT_API_BASE });
     localStorage.removeItem('taskman_active_tenant');
     setProjects([]);
     setIssues([]);
@@ -427,13 +432,16 @@ export function WorkspaceProvider({ children }) {
     setMemberships([]);
     setAuthStatus('signed_out');
     setBootstrapReady(true);
+    setEventStatus('offline');
+    workspaceLoadedTenantRef.current = '';
+    workspaceLoadRef.current = false;
   }, [session.apiBase, updateSession]);
 
   const createProject = async (payload) => {
     try {
       const result = await api.post('/projects', payload);
       showSuccess('Project created');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
       if (result.project?.id) setActiveProjectId(result.project.id);
       return result;
     } catch (error) { showError(error); }
@@ -447,7 +455,7 @@ export function WorkspaceProvider({ children }) {
         setActiveProjectId(projectId);
       }
       showSuccess('Project updated');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
       return result;
     } catch (error) { showError(error); }
   };
@@ -467,7 +475,7 @@ export function WorkspaceProvider({ children }) {
         setSelectedIssue((current) => current?.id === result.issue.id ? { ...current, ...result.issue } : current);
       }
       showSuccess('Issue created');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
       return result;
     } catch (error) { showError(error); }
   };
@@ -478,7 +486,7 @@ export function WorkspaceProvider({ children }) {
       setIssues((current) => current.map((issue) => issue.id === issueId ? { ...issue, ...result.issue } : issue));
       setSelectedIssue((current) => current?.id === issueId ? { ...current, ...result.issue } : current);
       showSuccess('Issue updated');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
     } catch (error) { showError(error); }
   };
 
@@ -488,7 +496,7 @@ export function WorkspaceProvider({ children }) {
       await api.delete(`/issues/${issueId}`);
       setSelectedIssue(null);
       showSuccess('Issue deleted');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
     } catch (error) { showError(error); }
   };
 
@@ -498,7 +506,7 @@ export function WorkspaceProvider({ children }) {
     setIssues((current) => current.map((issue) => issue.id === issueId ? { ...issue, status, position } : issue));
     try {
       await api.patch(`/issues/${issueId}/status`, { status, position });
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
     } catch (error) {
       setIssues(previous);
       showError(error);
@@ -509,7 +517,7 @@ export function WorkspaceProvider({ children }) {
     try {
       const result = await api.post('/sprints', payload);
       showSuccess('Sprint created');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
       return result;
     } catch (error) { showError(error); }
   };
@@ -518,7 +526,7 @@ export function WorkspaceProvider({ children }) {
     try {
       await api.post(`/sprints/${sprintId}/start`, {});
       showSuccess('Sprint started');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
     } catch (error) { showError(error); }
   };
 
@@ -526,7 +534,7 @@ export function WorkspaceProvider({ children }) {
     try {
       await api.post(`/sprints/${sprintId}/complete`, { incomplete_strategy: 'BACKLOG' });
       showSuccess('Sprint completed');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
     } catch (error) { showError(error); }
   };
 
@@ -535,7 +543,7 @@ export function WorkspaceProvider({ children }) {
     try {
       await api.post(`/sprints/${sprintId}/issues`, { issue_ids: issueIds });
       showSuccess('Issues added to sprint');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
     } catch (error) { showError(error); }
   };
 

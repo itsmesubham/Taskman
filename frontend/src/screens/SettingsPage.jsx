@@ -61,7 +61,7 @@ export default function SettingsPage() {
       await api.post(`/tenants/${session.tenant.id}/members`, { email, role });
       setEmail('');
       showSuccess('Member added');
-      await loadWorkspace(true);
+      await loadWorkspace(true, true);
     } catch (error) { showError(error); }
   };
 

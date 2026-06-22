@@ -57,7 +57,7 @@ export default function Topbar({ onMenu }) {
         <span>⌕</span>
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tasks, assignees, priority" />
       </div>
-      <button className="ghost desktop-only" onClick={() => loadWorkspace()}>{loading ? 'Syncing...' : 'Refresh'}</button>
+      <button className="ghost desktop-only" onClick={() => loadWorkspace(false, true)}>{loading ? 'Syncing...' : 'Refresh'}</button>
       <span className={cx('realtime-pill', eventStatus)}>{eventStatus}</span>
     </header>
   );

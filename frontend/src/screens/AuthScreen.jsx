@@ -38,11 +38,20 @@ export default function AuthScreen() {
         ? { email, password }
         : { name: fullName, email, password };
       const result = await authClient.post(mode === 'login' ? '/auth/login' : '/auth/signup', payload);
+      const memberships = result.memberships || [];
+      const preferredTenantId = result.user?.active_tenant_id || memberships[0]?.tenant_id || null;
+      const preferredMembership = memberships.find((membership) => membership.tenant_id === preferredTenantId) || memberships[0] || null;
+      const activeTenant = preferredMembership ? {
+        id: preferredMembership.tenant_id,
+        name: preferredMembership.tenant_name || 'Workspace',
+        slug: preferredMembership.tenant_slug || ''
+      } : null;
       updateSession({
         apiBase: DEFAULT_API_BASE,
         token: result.access_token,
         user: result.user,
-        tenant: null
+        tenant: activeTenant,
+        memberships
       });
     } catch (err) {
       setError(err.message);
