@@ -68,22 +68,24 @@ def invite_url_for_tenant(tenant: dict) -> str:
 
 
 def ensure_default_project(tenant_id: str):
-    projects = fetch_all(
-        "SELECT * FROM projects WHERE tenant_id = %s ORDER BY created_at ASC",
-        (tenant_id,),
-    )
-    if projects:
-        return projects[0]
-
     tenant = fetch_one("SELECT * FROM tenants WHERE id = %s", (tenant_id,))
     tenant_name = (tenant["name"] if tenant else "Workspace").strip() or "Workspace"
     default_key = project_key(tenant_name)
+    existing = fetch_one(
+        "SELECT * FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1",
+        (tenant_id, default_key),
+    )
+    if existing:
+        return existing
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO projects (tenant_id, name, key, description, visibility, created_by)
                 VALUES (%s, %s, %s, %s, %s, NULL)
+                ON CONFLICT (tenant_id, key)
+                DO NOTHING
                 RETURNING *
                 """,
                 (
@@ -93,6 +95,13 @@ def ensure_default_project(tenant_id: str):
                     "Auto-created default project for this workspace.",
                     "EVERYONE",
                 ),
+            )
+            project = cur.fetchone()
+            if project:
+                return project
+            cur.execute(
+                "SELECT * FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1",
+                (tenant_id, default_key),
             )
             project = cur.fetchone()
     return project
@@ -105,6 +114,8 @@ def ensure_current_monthly_sprint(tenant_id: str, project_id: str):
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            lock_key = f"{tenant_id}:{project_id}:{start_date.isoformat()}:{end_date.isoformat()}"
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s)::bigint)", (lock_key,))
             cur.execute(
                 """
                 UPDATE sprints
@@ -144,8 +155,20 @@ def ensure_current_monthly_sprint(tenant_id: str, project_id: str):
                     sprint_name,
                     "Auto-created monthly sprint for board-first task tracking.",
                     start_date,
-                    end_date,
+                end_date,
                 ),
+            )
+            sprint = cur.fetchone()
+            if sprint:
+                return sprint
+            cur.execute(
+                """
+                SELECT * FROM sprints
+                WHERE tenant_id = %s AND project_id = %s AND start_date = %s AND end_date = %s
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (tenant_id, project_id, start_date, end_date),
             )
             sprint = cur.fetchone()
     return sprint
