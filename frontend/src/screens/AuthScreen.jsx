@@ -3,7 +3,7 @@ import { DEFAULT_API_BASE, ApiClient } from '../api/client.js';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 
 export default function AuthScreen() {
-  const { updateSession, inviteCode } = useWorkspace();
+  const { updateSession, inviteCode, navigate } = useWorkspace();
   const [mode, setMode] = useState('login');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -46,7 +46,8 @@ export default function AuthScreen() {
         name: preferredMembership.tenant_name || 'Workspace',
         slug: preferredMembership.tenant_slug || ''
       } : null;
-      updateSession({
+
+      const baseSession = {
         apiBase: DEFAULT_API_BASE,
         token: result.access_token,
         user: {
@@ -56,7 +57,33 @@ export default function AuthScreen() {
         },
         tenant: activeTenant,
         memberships
-      });
+      };
+
+      if (inviteCode) {
+        const inviteClient = new ApiClient(() => ({ token: result.access_token, apiBase: DEFAULT_API_BASE }));
+        const inviteResult = await inviteClient.post(`/invites/${inviteCode}/accept`, {});
+        const inviteMemberships = inviteResult.memberships || [];
+        const inviteTenant = inviteResult.tenant ? {
+          id: inviteResult.tenant.id,
+          name: inviteResult.tenant.name,
+          slug: inviteResult.tenant.slug || ''
+        } : null;
+        updateSession({
+          ...baseSession,
+          token: inviteResult.access_token || baseSession.token,
+          user: {
+            ...(baseSession.user || {}),
+            role: inviteResult.membership?.role || baseSession.user?.role || 'MEMBER',
+            active_tenant_id: inviteResult.active_tenant_id || inviteTenant?.id || baseSession.user?.active_tenant_id || null
+          },
+          tenant: inviteTenant || baseSession.tenant,
+          memberships: inviteMemberships.length ? inviteMemberships : baseSession.memberships
+        });
+        navigate('/');
+        return;
+      }
+
+      updateSession(baseSession);
     } catch (err) {
       setError(err.message);
     } finally {

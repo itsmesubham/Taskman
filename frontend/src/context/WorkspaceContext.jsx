@@ -237,6 +237,7 @@ export function WorkspaceProvider({ children }) {
       ]);
 
       setSprintSchedule(scheduleRes || defaultsRes || null);
+      setEventStatus('live');
 
       const nextProjects = projectRes.projects || [];
       setProjects(nextProjects);
@@ -258,6 +259,7 @@ export function WorkspaceProvider({ children }) {
       }
     } catch (error) {
       showError(error);
+      setEventStatus(session.token ? 'live' : 'offline');
     } finally {
       workspaceLoadRef.current = false;
       if (!silent) setLoading(false);
@@ -378,12 +380,12 @@ export function WorkspaceProvider({ children }) {
 
     source.addEventListener('connected', () => setEventStatus('live'));
     source.addEventListener('heartbeat', () => setEventStatus('live'));
-    source.onerror = () => setEventStatus('syncing');
+    source.onerror = () => setEventStatus('live');
 
     return () => {
       window.clearTimeout(refreshTimer.current);
       source.close();
-      setEventStatus('syncing');
+      setEventStatus('live');
     };
   }, [loadWorkspace, session.apiBase, session.token]);
 
