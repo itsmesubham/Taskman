@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .database import init_pool, close_pool
 from .migrations import init_schema
-from .routers import auth, tenants, projects, issues, sprints, comments, reports, ai, events
+from .routers import auth, tenants, projects, issues, sprints, comments, reports, ai, events, workspaces
 
 settings = get_settings()
 
@@ -43,6 +43,7 @@ app.include_router(tenants.router)
 app.include_router(projects.router)
 app.include_router(issues.router)
 app.include_router(sprints.router)
+app.include_router(workspaces.router)
 app.include_router(comments.router)
 app.include_router(reports.router)
 app.include_router(ai.router)

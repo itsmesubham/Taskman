@@ -14,3 +14,9 @@ def init_schema() -> None:
                 ALTER COLUMN position TYPE BIGINT
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE IF EXISTS projects
+                ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'EVERYONE'
+                """
+            )

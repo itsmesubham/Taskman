@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
-import CreateIssuePanel from '../components/CreateIssuePanel.jsx';
 import { EmptyInline } from '../components/EmptyState.jsx';
+import CreateTaskDrawer from '../components/CreateTaskDrawer.jsx';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { priorityClass } from '../utils.js';
 
 export default function BacklogPage() {
-  const { activeProject, backlogIssues, projectSprints, createIssue, addIssuesToSprint, setSelectedIssue } = useWorkspace();
+  const { page, backlogIssues, projectSprints, addIssuesToSprint, setSelectedIssue, taskDrawerOpen, taskDrawerDefaultStatus, closeCreateTaskDrawer, openCreateTaskDrawer } = useWorkspace();
   const [selected, setSelected] = useState([]);
   const [targetSprint, setTargetSprint] = useState('');
   const plannedSprints = projectSprints.filter((sprint) => sprint.status !== 'COMPLETED');
@@ -20,8 +20,14 @@ export default function BacklogPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="Planning" title="Backlog" description="Capture ideas, bugs, and improvements before assigning them to a sprint." />
-      <CreateIssuePanel defaultStatus="BACKLOG" onCreate={createIssue} projectId={activeProject?.id} />
+      <PageHeader
+        eyebrow="Planning"
+        title={page === 'backlog' ? 'Backlog' : 'My Tasks'}
+        description={page === 'backlog'
+          ? 'Capture work that is not yet on the board, then pull it into a sprint when ready.'
+          : 'View work assigned to you or waiting to be organized into a sprint.'}
+        action={<button type="button" className="primary" onClick={() => openCreateTaskDrawer('BACKLOG')}>Create Task</button>}
+      />
       <section className="panel">
         <div className="panel-head wrap">
           <div><h3>Backlog items</h3><span>{backlogIssues.length} issues</span></div>
@@ -45,6 +51,11 @@ export default function BacklogPage() {
           {!backlogIssues.length && <EmptyInline title="No backlog issues" text="Create an issue above or generate tasks from AI Planner." />}
         </div>
       </section>
+      <CreateTaskDrawer
+        open={taskDrawerOpen}
+        onClose={closeCreateTaskDrawer}
+        defaultStatus={taskDrawerDefaultStatus}
+      />
     </div>
   );
 }

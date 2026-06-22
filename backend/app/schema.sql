@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     key TEXT NOT NULL,
     description TEXT DEFAULT '',
+    visibility TEXT NOT NULL DEFAULT 'EVERYONE',
     status TEXT NOT NULL DEFAULT 'ACTIVE',
     issue_counter INTEGER NOT NULL DEFAULT 0,
     created_by UUID REFERENCES users(id),

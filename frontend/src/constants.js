@@ -10,13 +10,16 @@ export const ISSUE_STATUSES = ['BACKLOG', ...STATUSES.map((item) => item.key)];
 export const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
 export const ISSUE_TYPES = ['TASK', 'BUG', 'STORY', 'EPIC', 'IMPROVEMENT'];
 
-export const NAV_ITEMS = [
-  ['dashboard', 'Dashboard', '▦'],
-  ['projects', 'Projects', '□'],
-  ['backlog', 'Backlog', '☰'],
-  ['board', 'Board', '⇄'],
-  ['sprints', 'Sprints', '◷'],
-  ['reports', 'Reports', '◌'],
-  ['ai', 'AI Planner', '✦'],
-  ['settings', 'Settings', '⚙']
+export const MAIN_NAV_ITEMS = [
+  ['board', 'Board'],
+  ['backlog', 'Backlog'],
+  ['my-tasks', 'My Tasks'],
+  ['projects', 'Projects'],
+  ['sprints', 'Sprints'],
+  ['reports', 'Reports']
+];
+
+export const MOBILE_NAV_ITEMS = [
+  ...MAIN_NAV_ITEMS,
+  ['settings', 'Settings']
 ];

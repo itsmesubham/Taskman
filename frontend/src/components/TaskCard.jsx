@@ -1,16 +1,20 @@
-import { initials, priorityClass } from '../utils.js';
+import PriorityBadge from './PriorityBadge.jsx';
+import ProjectBadge from './ProjectBadge.jsx';
+import StatusPill from './StatusPill.jsx';
+import { initials } from '../utils.js';
 
-export default function IssueCard({ issue, members = [], draggable = false, onDragStart, onClick, onAssign }) {
+export default function TaskCard({ issue, members = [], draggable = false, onDragStart, onClick, onAssign }) {
   const assigneeOptions = members.length ? members : [];
   const assigneeLabel = issue.assignee_name || 'Unassigned';
+
   return (
     <article className="issue-card issue-card-compact" draggable={draggable} onDragStart={onDragStart} onClick={onClick}>
       <div className="issue-card-head">
         <div className="issue-card-key">
           <strong>{issue.issue_key}</strong>
-          <span className={priorityClass(issue.priority)}>{issue.priority}</span>
+          <PriorityBadge priority={issue.priority} />
         </div>
-        <span className={`status-pill ${String(issue.status || '').toLowerCase()}`}>{String(issue.status || 'TODO').replace('_', ' ')}</span>
+        <StatusPill status={issue.status} />
       </div>
 
       <h4>{issue.title}</h4>
@@ -20,7 +24,8 @@ export default function IssueCard({ issue, members = [], draggable = false, onDr
       <div className="card-meta">
         {issue.story_points ? <span>{issue.story_points} pts</span> : null}
         {issue.due_date && <span>{issue.due_date}</span>}
-        {issue.project_key && <span className="project-badge">{issue.project_key}</span>}
+        {issue.sprint_name && <span className="sprint-badge">{issue.sprint_name}</span>}
+        {issue.project_key && <ProjectBadge projectKey={issue.project_key} />}
       </div>
 
       <div className="card-footer">
@@ -47,8 +52,4 @@ export default function IssueCard({ issue, members = [], draggable = false, onDr
       </div>
     </article>
   );
-}
-
-export function IssueCompact({ issue }) {
-  return <div className="issue-row"><span className="issue-row-main"><strong>{issue.issue_key}</strong><span>{issue.title}</span></span><span className={priorityClass(issue.priority)}>{issue.priority}</span><span className="points">{issue.story_points || 0} pts</span></div>;
 }

@@ -5,6 +5,7 @@ from ..database import fetch_all, fetch_one, execute, get_conn
 from ..security import get_current_user
 from ..utils import row_to_json, rows_to_json
 from ..services.activity import record_activity
+from ..services.workspace_defaults import ensure_workspace_board_defaults, ensure_default_project, ensure_current_monthly_sprint
 from ..sse import event_bus
 
 router = APIRouter(prefix="/api/issues", tags=["issues"])
@@ -15,7 +16,7 @@ VALID_PRIORITIES = {"LOW", "MEDIUM", "HIGH", "URGENT"}
 
 
 class IssueCreate(BaseModel):
-    project_id: str
+    project_id: str | None = None
     title: str = Field(min_length=1, max_length=240)
     description: str = ""
     issue_type: str = "TASK"
@@ -34,6 +35,7 @@ class IssueUpdate(BaseModel):
     issue_type: str | None = None
     status: str | None = None
     priority: str | None = None
+    project_id: str | None = None
     sprint_id: str | None = None
     assignee_id: str | None = None
     story_points: int | None = Field(default=None, ge=0, le=100)
@@ -95,6 +97,12 @@ def ensure_sprint(sprint_id: str | None, tenant_id: str, project_id: str):
     return sprint
 
 
+def ensure_project_for_task(tenant_id: str, project_id: str | None):
+    if project_id:
+        return ensure_project(project_id, tenant_id)
+    return ensure_default_project(tenant_id)
+
+
 @router.get("")
 def list_issues(
     current_user: dict = Depends(get_current_user),
@@ -104,6 +112,7 @@ def list_issues(
     assignee_id: str | None = None,
     q: str | None = Query(default=None),
 ):
+    ensure_workspace_board_defaults(current_user["tenant_id"])
     params: list[Any] = [current_user["tenant_id"]]
     where = ["i.tenant_id = %s"]
     if project_id:
@@ -144,20 +153,26 @@ def list_issues(
 async def create_issue(payload: IssueCreate, current_user: dict = Depends(get_current_user)):
     tenant_id = str(current_user["tenant_id"])
     validate_issue_values(payload.issue_type, payload.status, payload.priority)
-    project = ensure_project(payload.project_id, tenant_id)
-    ensure_sprint(payload.sprint_id, tenant_id, payload.project_id)
+    ensure_workspace_board_defaults(tenant_id)
+    project = ensure_project_for_task(tenant_id, payload.project_id)
+    sprint_id = payload.sprint_id
+    if sprint_id:
+        ensure_sprint(sprint_id, tenant_id, project["id"])
+    elif payload.status != "BACKLOG":
+        sprint = ensure_current_monthly_sprint(tenant_id, project["id"])
+        sprint_id = sprint["id"]
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE projects SET issue_counter = issue_counter + 1, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING issue_counter, key",
-                (payload.project_id, tenant_id),
+                (project["id"], tenant_id),
             )
             counter_row = cur.fetchone()
             issue_key = f"{counter_row['key']}-{counter_row['issue_counter']}"
             cur.execute(
                 "SELECT COALESCE(MAX(position), 0) + 1000 AS next_position FROM issues WHERE tenant_id = %s AND project_id = %s AND status = %s",
-                (tenant_id, payload.project_id, payload.status),
+                (tenant_id, project["id"], payload.status),
             )
             position = cur.fetchone()["next_position"]
             cur.execute(
@@ -171,8 +186,8 @@ async def create_issue(payload: IssueCreate, current_user: dict = Depends(get_cu
                 """,
                 (
                     tenant_id,
-                    payload.project_id,
-                    payload.sprint_id,
+                    project["id"],
+                    sprint_id,
                     issue_key,
                     payload.title.strip(),
                     payload.description,
@@ -189,9 +204,14 @@ async def create_issue(payload: IssueCreate, current_user: dict = Depends(get_cu
             )
             issue = cur.fetchone()
 
-    record_activity(tenant_id, current_user["id"], "issue_created", f"Created {issue['issue_key']}: {issue['title']}", project_id=payload.project_id, issue_id=issue["id"])
+    record_activity(tenant_id, current_user["id"], "issue_created", f"Created {issue['issue_key']}: {issue['title']}", project_id=project["id"], issue_id=issue["id"])
     await event_bus.publish(tenant_id, "issue_created", {"issue": row_to_json(issue)})
     return {"issue": row_to_json(issue)}
+
+
+@router.post("/tasks")
+async def create_task(payload: IssueCreate, current_user: dict = Depends(get_current_user)):
+    return await create_issue(payload, current_user)
 
 
 @router.patch("/reorder")
@@ -237,27 +257,67 @@ async def update_issue(issue_id: str, payload: IssueUpdate, current_user: dict =
     tenant_id = str(current_user["tenant_id"])
     issue = ensure_issue(issue_id, tenant_id)
     validate_issue_values(payload.issue_type, payload.status, payload.priority)
+    if payload.project_id is not None:
+        ensure_project(payload.project_id, tenant_id)
     if payload.sprint_id is not None:
         ensure_sprint(payload.sprint_id, tenant_id, issue["project_id"])
 
     data = payload.model_dump(exclude_unset=True)
     if not data:
         return {"issue": row_to_json(issue)}
-    allowed = ["title", "description", "issue_type", "status", "priority", "sprint_id", "assignee_id", "story_points", "due_date", "labels", "position"]
-    sets = []
-    params = []
-    for field in allowed:
-        if field in data:
-            value = data[field]
-            if field == "title" and value is not None:
-                value = value.strip()
-            sets.append(f"{field} = %s")
-            params.append(value)
-    params.extend([issue_id, tenant_id])
-    updated = execute(
-        f"UPDATE issues SET {', '.join(sets)}, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
-        tuple(params),
-    )
+    if payload.project_id is None or payload.project_id == issue["project_id"]:
+        allowed = ["title", "description", "issue_type", "status", "priority", "sprint_id", "assignee_id", "story_points", "due_date", "labels", "position"]
+        sets = []
+        params = []
+        for field in allowed:
+            if field in data:
+                value = data[field]
+                if field == "title" and value is not None:
+                    value = value.strip()
+                sets.append(f"{field} = %s")
+                params.append(value)
+        params.extend([issue_id, tenant_id])
+        updated = execute(
+            f"UPDATE issues SET {', '.join(sets)}, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
+            tuple(params),
+        )
+    else:
+        project = ensure_project(payload.project_id, tenant_id)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE projects SET issue_counter = issue_counter + 1, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING issue_counter, key",
+                    (project["id"], tenant_id),
+                )
+                counter_row = cur.fetchone()
+                new_issue_key = f"{counter_row['key']}-{counter_row['issue_counter']}"
+                sprint_id = payload.sprint_id
+                if sprint_id is not None:
+                    ensure_sprint(sprint_id, tenant_id, project["id"])
+                elif data.get("status", issue["status"]) != "BACKLOG":
+                    sprint = ensure_current_monthly_sprint(tenant_id, project["id"])
+                    sprint_id = sprint["id"]
+                sets = ["project_id = %s", "issue_key = %s"]
+                params = [project["id"], new_issue_key]
+                if "title" in data:
+                    sets.append("title = %s")
+                    params.append(data["title"].strip() if data["title"] is not None else None)
+                for field in ["description", "issue_type", "status", "priority", "sprint_id", "assignee_id", "story_points", "due_date", "labels", "position"]:
+                    if field in data:
+                        value = data[field]
+                        if field == "sprint_id" and value is None:
+                            value = None
+                        sets.append(f"{field} = %s")
+                        params.append(value)
+                if "sprint_id" not in data:
+                    sets.append("sprint_id = %s")
+                    params.append(sprint_id)
+                params.extend([issue_id, tenant_id])
+                cur.execute(
+                    f"UPDATE issues SET {', '.join(sets)}, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
+                    tuple(params),
+                )
+                updated = cur.fetchone()
     record_activity(tenant_id, current_user["id"], "issue_updated", f"Updated {updated['issue_key']}", project_id=updated["project_id"], issue_id=issue_id, metadata=data)
     await event_bus.publish(tenant_id, "issue_updated", {"issue": row_to_json(updated), "changes": data})
     return {"issue": row_to_json(updated)}

@@ -11,9 +11,8 @@ export function WorkspaceProvider({ children }) {
     tenant: null,
     apiBase: DEFAULT_API_BASE
   }));
-  const [page, setPage] = useState('dashboard');
+  const [page, setPage] = useState('board');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readJson('taskman_sidebar_collapsed', false));
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [eventStatus, setEventStatus] = useState('offline');
@@ -23,12 +22,17 @@ export function WorkspaceProvider({ children }) {
   const [sprints, setSprints] = useState([]);
   const [members, setMembers] = useState([]);
   const [dashboard, setDashboard] = useState(null);
+  const [sprintSchedule, setSprintSchedule] = useState(null);
   const [activeProjectId, setActiveProjectIdState] = useState(() => localStorage.getItem('taskman_active_project') || '');
   const [boardSprintId, setBoardSprintId] = useState('active');
   const [query, setQuery] = useState('');
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [comments, setComments] = useState([]);
   const [draggedIssueId, setDraggedIssueId] = useState(null);
+  const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
+  const [taskDrawerDefaultStatus, setTaskDrawerDefaultStatus] = useState('TODO');
+  const [boardFilter, setBoardFilter] = useState('ALL');
+  const [boardQuickFilter, setBoardQuickFilter] = useState('ALL');
   const refreshTimer = useRef(null);
 
   const updateSession = useCallback((next) => {
@@ -53,11 +57,18 @@ export function WorkspaceProvider({ children }) {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  useEffect(() => saveJson('taskman_sidebar_collapsed', sidebarCollapsed), [sidebarCollapsed]);
-
   const setActiveProjectId = useCallback((id) => {
     setActiveProjectIdState(id);
     localStorage.setItem('taskman_active_project', id || '');
+  }, []);
+
+  const openCreateTaskDrawer = useCallback((status = 'TODO') => {
+    setTaskDrawerDefaultStatus(status);
+    setTaskDrawerOpen(true);
+  }, []);
+
+  const closeCreateTaskDrawer = useCallback(() => {
+    setTaskDrawerOpen(false);
   }, []);
 
   const loadWorkspace = useCallback(async (silent = false) => {
@@ -68,12 +79,16 @@ export function WorkspaceProvider({ children }) {
     }
     if (!silent) setLoading(true);
     try {
-      const [projectRes, sprintRes, issueRes, reportRes] = await Promise.all([
+      const [defaultsRes, scheduleRes, projectRes, sprintRes, issueRes, reportRes] = await Promise.all([
+        api.get('/workspaces/board'),
+        api.get('/sprints/schedule'),
         api.get('/projects'),
         api.get('/sprints'),
         api.get('/issues'),
         api.get('/reports/dashboard')
       ]);
+
+      setSprintSchedule(scheduleRes || defaultsRes || null);
 
       const nextProjects = projectRes.projects || [];
       setProjects(nextProjects);
@@ -149,7 +164,27 @@ export function WorkspaceProvider({ children }) {
   const boardIssues = visibleIssues.filter((issue) => {
     if (issue.status === 'BACKLOG') return false;
     if (!selectedBoardSprintId || selectedBoardSprintId === 'all') return true;
-    return issue.sprint_id === selectedBoardSprintId;
+    const sprintMatch = issue.sprint_id === selectedBoardSprintId;
+    if (!sprintMatch) return false;
+    if (boardFilter === 'ALL') return true;
+    if (boardFilter === 'REVIEW') return issue.status === 'IN_REVIEW';
+    return issue.status === boardFilter;
+  });
+  const filteredBoardIssues = boardIssues.filter((issue) => {
+    if (boardQuickFilter === 'ALL') return true;
+    if (boardQuickFilter === 'ME') return issue.assignee_id === session.user?.id;
+    if (boardQuickFilter === 'UNASSIGNED') return !issue.assignee_id;
+    if (boardQuickFilter === 'HIGH') return ['HIGH', 'URGENT'].includes(issue.priority);
+    if (boardQuickFilter === 'DUE_WEEK') {
+      if (!issue.due_date) return false;
+      const today = new Date();
+      const weekAhead = new Date();
+      weekAhead.setDate(today.getDate() + 7);
+      const due = new Date(issue.due_date);
+      return due >= new Date(today.toDateString()) && due <= weekAhead;
+    }
+    if (boardQuickFilter === 'BLOCKED') return issue.status === 'BLOCKED';
+    return true;
   });
 
   const logout = useCallback(() => {
@@ -159,7 +194,11 @@ export function WorkspaceProvider({ children }) {
     setSprints([]);
     setMembers([]);
     setDashboard(null);
+    setSprintSchedule(null);
     setSelectedIssue(null);
+    setTaskDrawerOpen(false);
+    setBoardFilter('ALL');
+    setBoardQuickFilter('ALL');
   }, [session.apiBase, updateSession]);
 
   const createProject = async (payload) => {
@@ -168,14 +207,40 @@ export function WorkspaceProvider({ children }) {
       showSuccess('Project created');
       await loadWorkspace(true);
       if (result.project?.id) setActiveProjectId(result.project.id);
+      return result;
+    } catch (error) { showError(error); }
+  };
+
+  const updateProject = async (projectId, payload) => {
+    try {
+      const result = await api.patch(`/projects/${projectId}`, payload);
+      setProjects((current) => current.map((project) => project.id === projectId ? { ...project, ...result.project } : project));
+      if (activeProjectId === projectId && result.project?.id) {
+        setActiveProjectId(projectId);
+      }
+      showSuccess('Project updated');
+      await loadWorkspace(true);
+      return result;
     } catch (error) { showError(error); }
   };
 
   const createIssue = async (payload) => {
     try {
-      await api.post('/issues', payload);
+      const status = payload.status || 'TODO';
+      const result = await api.post('/issues', {
+        ...payload,
+        project_id: payload.project_id || null,
+        sprint_id: payload.sprint_id || null,
+        status,
+        title: payload.title?.trim() || ''
+      });
+      if (result?.issue) {
+        setIssues((current) => [result.issue, ...current.filter((issue) => issue.id !== result.issue.id)]);
+        setSelectedIssue((current) => current?.id === result.issue.id ? { ...current, ...result.issue } : current);
+      }
       showSuccess('Issue created');
       await loadWorkspace(true);
+      return result;
     } catch (error) { showError(error); }
   };
 
@@ -214,9 +279,10 @@ export function WorkspaceProvider({ children }) {
 
   const createSprint = async (payload) => {
     try {
-      await api.post('/sprints', payload);
+      const result = await api.post('/sprints', payload);
       showSuccess('Sprint created');
       await loadWorkspace(true);
+      return result;
     } catch (error) { showError(error); }
   };
 
@@ -267,15 +333,18 @@ export function WorkspaceProvider({ children }) {
   const value = {
     session, updateSession, api,
     page, setPage, mobileNavOpen, setMobileNavOpen,
-    sidebarCollapsed, setSidebarCollapsed,
     toast, loading, eventStatus,
     projects, issues, sprints, members, dashboard,
     activeProject, activeProjectId, setActiveProjectId,
     activeSprint, projectSprints, selectedBoardSprintId,
     boardSprintId, setBoardSprintId,
+    boardFilter, setBoardFilter,
+    boardQuickFilter, setBoardQuickFilter,
+    sprintSchedule,
+    taskDrawerOpen, taskDrawerDefaultStatus, openCreateTaskDrawer, closeCreateTaskDrawer,
     query, setQuery,
-    backlogIssues, boardIssues, visibleIssues,
-    loadWorkspace, createProject, createIssue, updateIssue, deleteIssue, moveIssueStatus,
+    backlogIssues, boardIssues, filteredBoardIssues, visibleIssues,
+    loadWorkspace, createProject, updateProject, createIssue, updateIssue, deleteIssue, moveIssueStatus,
     createSprint, startSprint, completeSprint, addIssuesToSprint,
     selectedIssue, setSelectedIssue, comments, addComment,
     draggedIssueId, setDraggedIssueId,

@@ -4,6 +4,7 @@ from ..database import fetch_all, fetch_one, execute, get_conn
 from ..security import get_current_user, require_role
 from ..utils import row_to_json, rows_to_json
 from ..services.activity import record_activity
+from ..services.workspace_defaults import ensure_workspace_board_defaults, get_workspace_sprint_schedule
 from ..sse import event_bus
 
 router = APIRouter(prefix="/api/sprints", tags=["sprints"])
@@ -78,6 +79,12 @@ def list_sprints(current_user: dict = Depends(get_current_user), project_id: str
         tuple(params),
     )
     return {"sprints": rows_to_json(rows)}
+
+
+@router.get("/schedule")
+def sprint_schedule(current_user: dict = Depends(get_current_user), project_id: str | None = None):
+    ensure_workspace_board_defaults(current_user["tenant_id"])
+    return get_workspace_sprint_schedule(current_user["tenant_id"], project_id)
 
 
 @router.post("")

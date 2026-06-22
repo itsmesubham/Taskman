@@ -1,16 +1,47 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import { EmptyInline } from '../components/EmptyState.jsx';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { formatDate } from '../utils.js';
+import SprintScheduleCard from '../components/SprintScheduleCard.jsx';
+
+function SprintSection({ id, title, items, emptyText, action }) {
+  return (
+    <section className="panel" id={id}>
+      <div className="panel-head wrap">
+        <div><h3>{title}</h3><span>{items.length}</span></div>
+        {action}
+      </div>
+      <div className="sprint-grid">
+        {items.map((sprint) => (
+          <article className="sprint-card" key={sprint.id}>
+            <div className="sprint-card-top">
+              <div>
+                <h4>{sprint.name}</h4>
+                <span>{sprint.project_key} · {sprint.status}</span>
+              </div>
+              <span className={`sprint-status ${String(sprint.status || '').toLowerCase()}`}>{sprint.status}</span>
+            </div>
+            <p className="muted">{sprint.goal || 'No sprint goal.'}</p>
+            <div className="sprint-meta"><span>{formatDate(sprint.start_date)}</span><span>→</span><span>{formatDate(sprint.end_date)}</span></div>
+            <div className="progress-line"><span style={{ width: `${sprint.issue_count ? Math.round((sprint.done_count / sprint.issue_count) * 100) : 0}%` }} /></div>
+            <div className="sprint-summary-row"><strong>{sprint.done_count || 0}/{sprint.issue_count || 0}</strong><span>issues done</span></div>
+          </article>
+        ))}
+      </div>
+      {!items.length && <EmptyInline title={title} text={emptyText} />}
+    </section>
+  );
+}
 
 export default function SprintsPage() {
-  const { activeProject, projectSprints, backlogIssues, createSprint, startSprint, completeSprint, addIssuesToSprint, setSelectedIssue } = useWorkspace();
+  const { activeProject, projectSprints, backlogIssues, createSprint, startSprint, completeSprint, addIssuesToSprint, setSelectedIssue, sprintSchedule } = useWorkspace();
   const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [selectedBacklog, setSelectedBacklog] = useState([]);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -20,38 +51,55 @@ export default function SprintsPage() {
     setGoal('');
     setStartDate('');
     setEndDate('');
+    setCreateOpen(false);
   };
+
+  const active = useMemo(() => projectSprints.filter((sprint) => sprint.status === 'ACTIVE'), [projectSprints]);
+  const upcoming = useMemo(() => projectSprints.filter((sprint) => sprint.status === 'PLANNED'), [projectSprints]);
+  const completed = useMemo(() => projectSprints.filter((sprint) => sprint.status === 'COMPLETED'), [projectSprints]);
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="Agile delivery" title="Sprint planning" description="Create sprints, pull in backlog, start execution, and complete work cleanly." />
-      <section className="panel form-panel">
-        <form className="form-grid" onSubmit={submit}>
-          <label>Sprint name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Sprint 1" required /></label>
-          <label>Start date<input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>
-          <label>End date<input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></label>
-          <label className="wide">Goal<textarea value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="What business outcome should this sprint deliver?" /></label>
-          <div className="form-actions wide"><button className="primary" disabled={!activeProject}>Create sprint</button></div>
-        </form>
-      </section>
+      <PageHeader
+        eyebrow="Agile delivery"
+        title="Sprint planning"
+        description="Monthly auto-sprints keep work moving without manual setup."
+        action={<button className="primary" onClick={() => setCreateOpen((current) => !current)}>{createOpen ? 'Close' : 'Manual Create Sprint'}</button>}
+      />
 
-      <div className="sprint-grid">
-        {projectSprints.map((sprint) => {
-          const picked = backlogIssues.filter((issue) => selectedBacklog.includes(issue.id));
-          return <section className="panel sprint-card" key={sprint.id}>
-            <div className="panel-head wrap"><div><h3>{sprint.name}</h3><span>{sprint.status} · {sprint.project_key}</span></div><span className={`sprint-status ${sprint.status.toLowerCase()}`}>{sprint.status}</span></div>
-            <p className="muted">{sprint.goal || 'No sprint goal.'}</p>
-            <div className="sprint-meta"><span>{formatDate(sprint.start_date)}</span><span>→</span><span>{formatDate(sprint.end_date)}</span></div>
-            <div className="progress-line"><span style={{ width: `${sprint.issue_count ? Math.round((sprint.done_count / sprint.issue_count) * 100) : 0}%` }} /></div>
-            <div className="sprint-actions">
-              {sprint.status === 'PLANNED' && <button className="primary" onClick={() => startSprint(sprint.id)}>Start</button>}
-              {sprint.status === 'ACTIVE' && <button className="danger" onClick={() => completeSprint(sprint.id)}>Complete</button>}
-              {sprint.status !== 'COMPLETED' && <button className="ghost" disabled={!picked.length} onClick={() => addIssuesToSprint(sprint.id, selectedBacklog)}>Add selected backlog</button>}
-            </div>
-          </section>;
-        })}
-        {!projectSprints.length && <EmptyInline title="No sprints yet" text="Create a sprint above for the selected project." />}
-      </div>
+      <SprintScheduleCard sprintSchedule={sprintSchedule} />
+
+      {createOpen && (
+        <section className="panel">
+          <div className="panel-head"><h3>Create sprint</h3><span>Manual only, auto sprint stays enabled</span></div>
+          <form className="form-grid" onSubmit={submit}>
+            <label>Sprint name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Sprint 1" required /></label>
+            <label>Start date<input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>
+            <label>End date<input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></label>
+            <label className="wide">Goal<textarea value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="What business outcome should this sprint deliver?" /></label>
+            <div className="form-actions wide"><button className="primary" disabled={!activeProject}>Create sprint</button></div>
+          </form>
+        </section>
+      )}
+
+      <SprintSection
+        id="current-sprints"
+        title="Active"
+        items={active}
+        emptyText="No active sprint."
+      />
+      <SprintSection
+        id="upcoming-sprints"
+        title="Upcoming"
+        items={upcoming}
+        emptyText="No upcoming sprint."
+      />
+      <SprintSection
+        id="completed-sprints"
+        title="Completed"
+        items={completed}
+        emptyText="No completed sprint yet."
+      />
 
       <section className="panel">
         <div className="panel-head"><h3>Backlog available for sprint</h3><span>{selectedBacklog.length} selected</span></div>
