@@ -49,7 +49,11 @@ export default function AuthScreen() {
       updateSession({
         apiBase: DEFAULT_API_BASE,
         token: result.access_token,
-        user: result.user,
+        user: {
+          ...result.user,
+          role: result.user?.role || preferredMembership?.role || null,
+          active_tenant_id: result.user?.active_tenant_id || preferredTenantId
+        },
         tenant: activeTenant,
         memberships
       });

@@ -284,6 +284,17 @@ export function WorkspaceProvider({ children }) {
       try {
         if (session.tenant?.id && Array.isArray(session.memberships) && session.memberships.length > 0) {
           setMemberships(session.memberships);
+          const activeMembership = session.memberships.find((membership) => membership.tenant_id === session.tenant.id) || session.memberships[0] || null;
+          if (activeMembership && (!session.user?.role || !session.user?.active_tenant_id)) {
+            updateSession({
+              ...session,
+              user: {
+                ...(session.user || {}),
+                role: session.user?.role || activeMembership.role || null,
+                active_tenant_id: session.user?.active_tenant_id || activeMembership.tenant_id
+              }
+            });
+          }
           setAuthStatus(inviteCode ? 'invite' : 'ready');
           return;
         }

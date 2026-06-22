@@ -26,8 +26,10 @@ export default function SettingsPage() {
   const [inviteInput, setInviteInput] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [loadingInvite, setLoadingInvite] = useState(false);
-  const isAdmin = String(session.user?.role || '').toUpperCase() === 'ADMIN';
-  const isOwner = String(session.user?.role || '').toUpperCase() === 'OWNER';
+  const activeMembership = memberships.find((membership) => membership.tenant_id === session.tenant?.id) || memberships[0] || null;
+  const currentRole = String(session.user?.role || activeMembership?.role || '').toUpperCase();
+  const isAdmin = currentRole === 'ADMIN';
+  const isOwner = currentRole === 'OWNER';
   const canManageInvite = isAdmin || isOwner;
 
   useEffect(() => {
@@ -123,7 +125,7 @@ export default function SettingsPage() {
             <span>Workspace</span><strong>{session.tenant?.name}</strong>
             <span>Slug</span><strong>{session.tenant?.slug}</strong>
             <span>User</span><strong>{session.user?.name}</strong>
-            <span>Role</span><strong>{session.user?.role}</strong>
+            <span>Role</span><strong>{currentRole || 'MEMBER'}</strong>
           </div>
         </section>
 
