@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .config import get_settings
 from .database import fetch_all, fetch_one
+from .services.memberships import memberships_for_user
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -93,16 +94,7 @@ def get_current_user(
     if active_row["tenant_id"]:
         return active_row
 
-    memberships = fetch_all(
-        """
-        SELECT tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
-        FROM tenant_members tm
-        JOIN tenants t ON t.id = tm.tenant_id
-        WHERE tm.user_id = %s AND tm.status = 'ACTIVE'
-        ORDER BY tm.joined_at ASC
-        """,
-        (user_id,),
-    )
+    memberships = memberships_for_user(user_id)
     if len(memberships) == 1:
         membership = memberships[0]
         return {
@@ -113,17 +105,13 @@ def get_current_user(
             "tenant_slug": membership["tenant_slug"],
         }
 
-    row = fetch_one(
-        """
-        SELECT u.id, u.name, u.email, u.active_tenant_id, NULL::uuid AS tenant_id, NULL::text AS role, NULL::text AS tenant_name, NULL::text AS tenant_slug
-        FROM users u
-        WHERE u.id = %s
-        """,
-        (user_id,),
-    )
-    if not row:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    return row
+    return {
+        **active_row,
+        "tenant_id": None,
+        "role": None,
+        "tenant_name": None,
+        "tenant_slug": None,
+    }
 
 
 def require_role(*roles: str):

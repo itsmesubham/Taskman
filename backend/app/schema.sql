@@ -106,9 +106,13 @@ CREATE TABLE IF NOT EXISTS activity_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenant_members_user ON tenant_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_members_user_status ON tenant_members(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_tenant_members_tenant_joined_at ON tenant_members(tenant_id, joined_at);
 CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_sprints_tenant_project ON sprints(tenant_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_sprints_tenant_project_status_start ON sprints(tenant_id, project_id, status, start_date);
 CREATE INDEX IF NOT EXISTS idx_issues_tenant_project ON issues(tenant_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_issues_tenant_project_status_position ON issues(tenant_id, project_id, status, position);
 CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id);
 CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id);

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from ..database import fetch_all, fetch_one, execute, get_conn
 from ..security import create_token, get_current_user, require_role, normalize_email
+from ..services.memberships import memberships_for_user
 from ..services.workspace_defaults import ensure_workspace_invite, invite_url_for_tenant
 from ..services.activity import record_activity
 from ..sse import event_bus
@@ -24,18 +25,7 @@ class MemberInvite(BaseModel):
 
 
 def _tenant_memberships(user_id: str):
-    rows = fetch_all(
-        """
-        SELECT tm.tenant_id, tm.role, tm.status, tm.joined_at,
-               t.name AS tenant_name, t.slug AS tenant_slug, t.invite_code, t.invite_enabled
-        FROM tenant_members tm
-        JOIN tenants t ON t.id = tm.tenant_id
-        WHERE tm.user_id = %s
-        ORDER BY tm.joined_at ASC
-        """,
-        (user_id,),
-    )
-    return rows_to_json(rows)
+    return rows_to_json(memberships_for_user(user_id))
 
 
 def resolve_tenant_id(current_user: dict) -> str:

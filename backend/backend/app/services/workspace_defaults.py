@@ -70,7 +70,7 @@ def invite_url_for_tenant(tenant: dict) -> str:
 def ensure_default_project(tenant_id: str):
     if not tenant_id:
         return None
-    tenant = fetch_one("SELECT * FROM tenants WHERE id = %s", (tenant_id,))
+    tenant = fetch_one("SELECT name FROM tenants WHERE id = %s", (tenant_id,))
     tenant_name = (tenant["name"] if tenant else "Workspace").strip() or "Workspace"
     default_key = project_key(tenant_name)
     existing = fetch_one(

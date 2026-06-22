@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
-from ..database import fetch_all, fetch_one, get_conn
+from ..database import fetch_one, get_conn
 from ..security import create_token, get_current_user, hash_password, normalize_email, verify_password
+from ..services.memberships import active_membership_for_user, memberships_for_user
 from ..utils import row_to_json, rows_to_json
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -18,27 +19,9 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def _memberships_for_user(user_id: str):
-    rows = fetch_all(
-        """
-        SELECT tm.tenant_id, tm.role, tm.status, tm.joined_at,
-               t.name AS tenant_name, t.slug AS tenant_slug, t.invite_code, t.invite_enabled
-        FROM tenant_members tm
-        JOIN tenants t ON t.id = tm.tenant_id
-        WHERE tm.user_id = %s
-        ORDER BY tm.joined_at ASC
-        """,
-        (user_id,),
-    )
-    return rows_to_json(rows)
-
-
 def _user_payload(user: dict, memberships: list[dict] | None = None):
     memberships = memberships or []
-    active_membership = None
-    if memberships:
-        active_tenant_id = user.get("active_tenant_id")
-        active_membership = next((membership for membership in memberships if membership.get("tenant_id") == active_tenant_id), None) or memberships[0]
+    active_membership = active_membership_for_user(str(user["id"]), user.get("active_tenant_id"), memberships) if memberships else None
     return row_to_json({
         "id": user["id"],
         "name": user["name"],
@@ -67,7 +50,7 @@ def signup(payload: SignupRequest):
                 )
                 user = cur.fetchone()
 
-    memberships = _memberships_for_user(str(user["id"]))
+    memberships = rows_to_json(memberships_for_user(str(user["id"])))
     return {
         "access_token": create_token(str(user["id"])),
         "token_type": "bearer",
@@ -85,7 +68,7 @@ def login(payload: LoginRequest):
     )
     if not row or not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    memberships = _memberships_for_user(str(row["id"]))
+    memberships = rows_to_json(memberships_for_user(str(row["id"])))
     return {
         "access_token": create_token(str(row["id"])),
         "token_type": "bearer",
@@ -96,7 +79,7 @@ def login(payload: LoginRequest):
 
 @router.get("/me")
 def me(current_user: dict = Depends(get_current_user)):
-    memberships = _memberships_for_user(str(current_user["id"]))
+    memberships = rows_to_json(memberships_for_user(str(current_user["id"])))
     return {
         "user": _user_payload(current_user, memberships),
         "memberships": memberships,

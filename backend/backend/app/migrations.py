@@ -57,3 +57,7 @@ def init_schema() -> None:
                 """
             )
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_invite_code ON tenants(invite_code)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_tenant_members_user_status ON tenant_members(user_id, status)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_tenant_members_tenant_joined_at ON tenant_members(tenant_id, joined_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_sprints_tenant_project_status_start ON sprints(tenant_id, project_id, status, start_date)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_issues_tenant_project_status_position ON issues(tenant_id, project_id, status, position)")

@@ -1,24 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from ..database import fetch_all, fetch_one, execute, get_conn
+from ..database import fetch_one, execute, get_conn
 from ..security import create_token, get_current_user
+from ..services.memberships import memberships_for_user
 from ..utils import row_to_json, rows_to_json
 
 router = APIRouter(prefix="/api/invites", tags=["invites"])
-
-
-def _memberships_for_user(user_id: str):
-    rows = fetch_all(
-        """
-        SELECT tm.tenant_id, tm.role, tm.status, tm.joined_at,
-               t.name AS tenant_name, t.slug AS tenant_slug, t.invite_code, t.invite_enabled
-        FROM tenant_members tm
-        JOIN tenants t ON t.id = tm.tenant_id
-        WHERE tm.user_id = %s
-        ORDER BY tm.joined_at ASC
-        """,
-        (user_id,),
-    )
-    return rows_to_json(rows)
 
 
 def _invite_payload(tenant):
@@ -56,10 +42,11 @@ def accept_invite(invite_code: str, current_user: dict = Depends(get_current_use
     if not tenant.get("invite_enabled", True):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invite link is disabled")
 
-    membership = fetch_one(
+    existing_membership = fetch_one(
         "SELECT * FROM tenant_members WHERE tenant_id = %s AND user_id = %s",
         (tenant["id"], current_user["id"]),
     )
+    membership = existing_membership
     if not membership:
         membership = execute(
             """
@@ -79,7 +66,7 @@ def accept_invite(invite_code: str, current_user: dict = Depends(get_current_use
             updated = cur.fetchone()
 
     return {
-        "already_member": bool(membership),
+        "already_member": bool(existing_membership),
         "active_tenant_id": updated["active_tenant_id"],
         "access_token": create_token(str(current_user["id"]), str(tenant["id"]), membership["role"]),
         "tenant": row_to_json({
@@ -89,5 +76,5 @@ def accept_invite(invite_code: str, current_user: dict = Depends(get_current_use
             "invite_code": tenant.get("invite_code"),
         }),
         "membership": row_to_json(membership),
-        "memberships": _memberships_for_user(str(current_user["id"]))
+        "memberships": rows_to_json(memberships_for_user(str(current_user["id"])))
     }
