@@ -72,6 +72,13 @@ def validate_issue_values(issue_type: str | None = None, status: str | None = No
         raise HTTPException(status_code=400, detail="Invalid priority")
 
 
+def resolve_tenant_id(current_user: dict) -> str:
+    tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Workspace not selected")
+    return str(tenant_id)
+
+
 def ensure_project(project_id: str, tenant_id: str):
     project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
     if not project:
@@ -104,7 +111,8 @@ def list_issues(
     assignee_id: str | None = None,
     q: str | None = Query(default=None),
 ):
-    params: list[Any] = [current_user["tenant_id"]]
+    tenant_id = resolve_tenant_id(current_user)
+    params: list[Any] = [tenant_id]
     where = ["i.tenant_id = %s"]
     if project_id:
         where.append("i.project_id = %s")
@@ -142,7 +150,7 @@ def list_issues(
 
 @router.post("")
 async def create_issue(payload: IssueCreate, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     validate_issue_values(payload.issue_type, payload.status, payload.priority)
     project = ensure_project(payload.project_id, tenant_id)
     ensure_sprint(payload.sprint_id, tenant_id, payload.project_id)
@@ -196,7 +204,7 @@ async def create_issue(payload: IssueCreate, current_user: dict = Depends(get_cu
 
 @router.patch("/reorder")
 async def reorder_issues(payload: ReorderRequest, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     updated_rows = []
     for item in payload.items:
         if item.status:
@@ -215,6 +223,7 @@ async def reorder_issues(payload: ReorderRequest, current_user: dict = Depends(g
 
 @router.get("/{issue_id}")
 def get_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
+    tenant_id = resolve_tenant_id(current_user)
     issue = fetch_one(
         """
         SELECT i.*, p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
@@ -225,7 +234,7 @@ def get_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
         LEFT JOIN sprints s ON s.id = i.sprint_id
         WHERE i.id = %s AND i.tenant_id = %s
         """,
-        (issue_id, current_user["tenant_id"]),
+        (issue_id, tenant_id),
     )
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
@@ -234,7 +243,7 @@ def get_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
 
 @router.patch("/{issue_id}")
 async def update_issue(issue_id: str, payload: IssueUpdate, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     issue = ensure_issue(issue_id, tenant_id)
     validate_issue_values(payload.issue_type, payload.status, payload.priority)
     if payload.sprint_id is not None:
@@ -265,7 +274,7 @@ async def update_issue(issue_id: str, payload: IssueUpdate, current_user: dict =
 
 @router.delete("/{issue_id}")
 async def delete_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     issue = execute("DELETE FROM issues WHERE id = %s AND tenant_id = %s RETURNING *", (issue_id, tenant_id))
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
@@ -276,7 +285,7 @@ async def delete_issue(issue_id: str, current_user: dict = Depends(get_current_u
 
 @router.patch("/{issue_id}/status")
 async def update_status(issue_id: str, payload: StatusUpdate, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     validate_issue_values(status=payload.status)
     issue = ensure_issue(issue_id, tenant_id)
     position = payload.position
@@ -294,7 +303,7 @@ async def update_status(issue_id: str, payload: StatusUpdate, current_user: dict
 
 @router.patch("/{issue_id}/sprint")
 async def update_sprint(issue_id: str, payload: SprintAssignment, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     issue = ensure_issue(issue_id, tenant_id)
     ensure_sprint(payload.sprint_id, tenant_id, issue["project_id"])
     status = payload.status or ("TODO" if payload.sprint_id and issue["status"] == "BACKLOG" else issue["status"])

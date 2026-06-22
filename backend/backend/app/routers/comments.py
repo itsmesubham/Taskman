@@ -20,9 +20,17 @@ def ensure_issue(issue_id: str, tenant_id: str):
     return issue
 
 
+def resolve_tenant_id(current_user: dict) -> str:
+    tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Workspace not selected")
+    return str(tenant_id)
+
+
 @router.get("")
 def list_comments(issue_id: str, current_user: dict = Depends(get_current_user)):
-    ensure_issue(issue_id, current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
+    ensure_issue(issue_id, tenant_id)
     rows = fetch_all(
         """
         SELECT c.*, u.name AS author_name, u.email AS author_email
@@ -31,14 +39,14 @@ def list_comments(issue_id: str, current_user: dict = Depends(get_current_user))
         WHERE c.issue_id = %s AND c.tenant_id = %s
         ORDER BY c.created_at ASC
         """,
-        (issue_id, current_user["tenant_id"]),
+        (issue_id, tenant_id),
     )
     return {"comments": rows_to_json(rows)}
 
 
 @router.post("")
 async def add_comment(issue_id: str, payload: CommentCreate, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     issue = ensure_issue(issue_id, tenant_id)
     comment = execute(
         """

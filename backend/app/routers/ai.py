@@ -33,6 +33,13 @@ def split_theme(prompt: str) -> list[str]:
     return unique[:8] or ["requirements", "implementation", "testing"]
 
 
+def resolve_tenant_id(current_user: dict) -> str:
+    tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Workspace not selected")
+    return str(tenant_id)
+
+
 @router.post("/breakdown")
 def breakdown(payload: BreakdownRequest, current_user: dict = Depends(get_current_user)):
     themes = split_theme(payload.prompt)
@@ -117,7 +124,8 @@ def acceptance_criteria(payload: AcceptanceCriteriaRequest, current_user: dict =
 
 @router.post("/sprint-plan")
 def sprint_plan(payload: SprintPlanRequest, current_user: dict = Depends(get_current_user)):
-    project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (payload.project_id, current_user["tenant_id"]))
+    tenant_id = resolve_tenant_id(current_user)
+    project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (payload.project_id, tenant_id))
     if not project:
         return {"mode": "heuristic", "selected_issues": [], "message": "Project not found"}
     rows = fetch_all(
@@ -128,7 +136,7 @@ def sprint_plan(payload: SprintPlanRequest, current_user: dict = Depends(get_cur
           CASE priority WHEN 'URGENT' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,
           created_at ASC
         """,
-        (current_user["tenant_id"], payload.project_id),
+        (tenant_id, payload.project_id),
     )
     selected = []
     total = 0
@@ -154,7 +162,8 @@ def sprint_plan(payload: SprintPlanRequest, current_user: dict = Depends(get_cur
 def sprint_insights(payload: SprintPlanRequest, current_user: dict = Depends(get_current_user)):
     if not payload.sprint_id:
         return {"mode": "heuristic", "insights": ["Select a sprint to get sprint-specific insights."]}
-    sprint = fetch_one("SELECT * FROM sprints WHERE id = %s AND tenant_id = %s", (payload.sprint_id, current_user["tenant_id"]))
+    tenant_id = resolve_tenant_id(current_user)
+    sprint = fetch_one("SELECT * FROM sprints WHERE id = %s AND tenant_id = %s", (payload.sprint_id, tenant_id))
     if not sprint:
         return {"mode": "heuristic", "insights": ["Sprint not found."]}
     summary = fetch_one(
@@ -166,7 +175,7 @@ def sprint_insights(payload: SprintPlanRequest, current_user: dict = Depends(get
                COALESCE(SUM(story_points) FILTER (WHERE status = 'DONE'), 0) AS done_points
         FROM issues WHERE tenant_id = %s AND sprint_id = %s
         """,
-        (current_user["tenant_id"], payload.sprint_id),
+        (tenant_id, payload.sprint_id),
     )
     total = summary["total"] or 0
     done = summary["done"] or 0

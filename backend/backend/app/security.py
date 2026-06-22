@@ -5,7 +5,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .config import get_settings
-from .database import fetch_one
+from .database import fetch_all, fetch_one
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -77,6 +77,41 @@ def get_current_user(
         if not row:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not a tenant member")
         return row
+
+    active_row = fetch_one(
+        """
+        SELECT u.id, u.name, u.email, u.active_tenant_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+        FROM users u
+        LEFT JOIN tenant_members tm ON tm.user_id = u.id AND tm.tenant_id = u.active_tenant_id
+        LEFT JOIN tenants t ON t.id = tm.tenant_id
+        WHERE u.id = %s
+        """,
+        (user_id,),
+    )
+    if not active_row:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if active_row["tenant_id"]:
+        return active_row
+
+    memberships = fetch_all(
+        """
+        SELECT tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+        FROM tenant_members tm
+        JOIN tenants t ON t.id = tm.tenant_id
+        WHERE tm.user_id = %s AND tm.status = 'ACTIVE'
+        ORDER BY tm.created_at ASC
+        """,
+        (user_id,),
+    )
+    if len(memberships) == 1:
+        membership = memberships[0]
+        return {
+            **active_row,
+            "tenant_id": membership["tenant_id"],
+            "role": membership["role"],
+            "tenant_name": membership["tenant_name"],
+            "tenant_slug": membership["tenant_slug"],
+        }
 
     row = fetch_one(
         """

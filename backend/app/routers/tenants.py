@@ -38,6 +38,13 @@ def _tenant_memberships(user_id: str):
     return rows_to_json(rows)
 
 
+def resolve_tenant_id(current_user: dict) -> str:
+    tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Workspace not selected")
+    return str(tenant_id)
+
+
 @router.get("")
 def list_tenants(search: str | None = None):
     if search:
@@ -131,7 +138,7 @@ def current_tenant(current_user: dict = Depends(get_current_user)):
 
 @router.get("/{tenant_id}/members")
 def members(tenant_id: str, current_user: dict = Depends(get_current_user)):
-    if str(current_user.get("tenant_id") or "") != tenant_id:
+    if resolve_tenant_id(current_user) != tenant_id:
         raise HTTPException(status_code=403, detail="Cannot access another tenant")
     rows = fetch_all(
         """
@@ -148,7 +155,7 @@ def members(tenant_id: str, current_user: dict = Depends(get_current_user)):
 
 @router.get("/{tenant_id}/invite-link")
 def get_invite_link(tenant_id: str, current_user: dict = Depends(require_role("OWNER", "ADMIN"))):
-    if str(current_user["tenant_id"]) != tenant_id:
+    if resolve_tenant_id(current_user) != tenant_id:
         raise HTTPException(status_code=403, detail="Cannot access another tenant")
     tenant = ensure_workspace_invite(tenant_id)
     if not tenant:
@@ -161,7 +168,7 @@ def get_invite_link(tenant_id: str, current_user: dict = Depends(require_role("O
 
 @router.post("/{tenant_id}/invite-link/regenerate")
 def regenerate_invite_link(tenant_id: str, current_user: dict = Depends(require_role("OWNER", "ADMIN"))):
-    if str(current_user["tenant_id"]) != tenant_id:
+    if resolve_tenant_id(current_user) != tenant_id:
         raise HTTPException(status_code=403, detail="Cannot access another tenant")
     tenant = ensure_workspace_invite(tenant_id, force_new=True)
     if not tenant:
@@ -174,7 +181,7 @@ def regenerate_invite_link(tenant_id: str, current_user: dict = Depends(require_
 
 @router.post("/{tenant_id}/invite-link/revoke")
 def revoke_invite_link(tenant_id: str, current_user: dict = Depends(require_role("OWNER", "ADMIN"))):
-    if str(current_user["tenant_id"]) != tenant_id:
+    if resolve_tenant_id(current_user) != tenant_id:
         raise HTTPException(status_code=403, detail="Cannot access another tenant")
     tenant = execute(
         "UPDATE tenants SET invite_enabled = false, updated_at = now() WHERE id = %s RETURNING *",
@@ -191,7 +198,7 @@ async def add_member(
     payload: MemberInvite,
     current_user: dict = Depends(require_role("OWNER", "ADMIN")),
 ):
-    if str(current_user["tenant_id"]) != tenant_id:
+    if resolve_tenant_id(current_user) != tenant_id:
         raise HTTPException(status_code=403, detail="Cannot access another tenant")
     user = fetch_one("SELECT id, name, email FROM users WHERE email = %s", (normalize_email(payload.email),))
     if not user:

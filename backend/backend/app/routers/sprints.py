@@ -35,6 +35,13 @@ class CompleteSprintRequest(BaseModel):
     incomplete_strategy: str = Field(default="BACKLOG", pattern="^(BACKLOG|KEEP)$")
 
 
+def resolve_tenant_id(current_user: dict) -> str:
+    tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Workspace not selected")
+    return str(tenant_id)
+
+
 def ensure_project(project_id: str, tenant_id: str):
     project = fetch_one("SELECT * FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
     if not project:
@@ -51,7 +58,8 @@ def ensure_sprint(sprint_id: str, tenant_id: str):
 
 @router.get("")
 def list_sprints(current_user: dict = Depends(get_current_user), project_id: str | None = None, status: str | None = None):
-    params = [current_user["tenant_id"]]
+    tenant_id = resolve_tenant_id(current_user)
+    params = [tenant_id]
     where = ["s.tenant_id = %s"]
     if project_id:
         where.append("s.project_id = %s")
@@ -82,7 +90,7 @@ def list_sprints(current_user: dict = Depends(get_current_user), project_id: str
 
 @router.post("")
 async def create_sprint(payload: SprintCreate, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     ensure_project(payload.project_id, tenant_id)
     sprint = execute(
         """
@@ -99,14 +107,15 @@ async def create_sprint(payload: SprintCreate, current_user: dict = Depends(get_
 
 @router.get("/{sprint_id}")
 def get_sprint(sprint_id: str, current_user: dict = Depends(get_current_user)):
-    sprint = ensure_sprint(sprint_id, current_user["tenant_id"])
-    issues = fetch_all("SELECT * FROM issues WHERE sprint_id = %s AND tenant_id = %s ORDER BY position ASC", (sprint_id, current_user["tenant_id"]))
+    tenant_id = resolve_tenant_id(current_user)
+    sprint = ensure_sprint(sprint_id, tenant_id)
+    issues = fetch_all("SELECT * FROM issues WHERE sprint_id = %s AND tenant_id = %s ORDER BY position ASC", (sprint_id, tenant_id))
     return {"sprint": row_to_json(sprint), "issues": rows_to_json(issues)}
 
 
 @router.patch("/{sprint_id}")
 async def update_sprint(sprint_id: str, payload: SprintUpdate, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     sprint = ensure_sprint(sprint_id, tenant_id)
     data = payload.model_dump(exclude_unset=True)
     if payload.status and payload.status not in VALID_STATUS:
@@ -134,7 +143,7 @@ async def update_sprint(sprint_id: str, payload: SprintUpdate, current_user: dic
 
 @router.post("/{sprint_id}/start")
 async def start_sprint(sprint_id: str, current_user: dict = Depends(require_role("OWNER", "ADMIN", "MEMBER"))):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     sprint = ensure_sprint(sprint_id, tenant_id)
     active = fetch_one("SELECT id FROM sprints WHERE tenant_id = %s AND project_id = %s AND status = 'ACTIVE' AND id != %s", (tenant_id, sprint["project_id"], sprint_id))
     if active:
@@ -148,7 +157,7 @@ async def start_sprint(sprint_id: str, current_user: dict = Depends(require_role
 
 @router.post("/{sprint_id}/complete")
 async def complete_sprint(sprint_id: str, payload: CompleteSprintRequest = CompleteSprintRequest(), current_user: dict = Depends(require_role("OWNER", "ADMIN"))):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     sprint = ensure_sprint(sprint_id, tenant_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -173,7 +182,7 @@ async def complete_sprint(sprint_id: str, payload: CompleteSprintRequest = Compl
 
 @router.post("/{sprint_id}/issues")
 async def add_issues_to_sprint(sprint_id: str, payload: SprintIssueRequest, current_user: dict = Depends(get_current_user)):
-    tenant_id = str(current_user["tenant_id"])
+    tenant_id = resolve_tenant_id(current_user)
     sprint = ensure_sprint(sprint_id, tenant_id)
     updated_rows = []
     for issue_id in payload.issue_ids:

@@ -6,9 +6,16 @@ from ..utils import row_to_json, rows_to_json
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
+def resolve_tenant_id(current_user: dict) -> str:
+    tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Workspace not selected")
+    return str(tenant_id)
+
+
 @router.get("/dashboard")
 def dashboard(current_user: dict = Depends(get_current_user), project_id: str | None = None):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = resolve_tenant_id(current_user)
     params = [tenant_id]
     project_filter = ""
     if project_id:
@@ -82,7 +89,8 @@ def dashboard(current_user: dict = Depends(get_current_user), project_id: str | 
 
 @router.get("/sprint/{sprint_id}")
 def sprint_report(sprint_id: str, current_user: dict = Depends(get_current_user)):
-    sprint = fetch_one("SELECT * FROM sprints WHERE id = %s AND tenant_id = %s", (sprint_id, current_user["tenant_id"]))
+    tenant_id = resolve_tenant_id(current_user)
+    sprint = fetch_one("SELECT * FROM sprints WHERE id = %s AND tenant_id = %s", (sprint_id, tenant_id))
     if not sprint:
         raise HTTPException(status_code=404, detail="Sprint not found")
     summary = fetch_one(
@@ -96,7 +104,7 @@ def sprint_report(sprint_id: str, current_user: dict = Depends(get_current_user)
         FROM issues
         WHERE tenant_id = %s AND sprint_id = %s
         """,
-        (current_user["tenant_id"], sprint_id),
+        (tenant_id, sprint_id),
     )
-    by_status = fetch_all("SELECT status, COUNT(*) AS count FROM issues WHERE tenant_id = %s AND sprint_id = %s GROUP BY status", (current_user["tenant_id"], sprint_id))
+    by_status = fetch_all("SELECT status, COUNT(*) AS count FROM issues WHERE tenant_id = %s AND sprint_id = %s GROUP BY status", (tenant_id, sprint_id))
     return {"sprint": row_to_json(sprint), "summary": row_to_json(summary), "by_status": rows_to_json(by_status)}

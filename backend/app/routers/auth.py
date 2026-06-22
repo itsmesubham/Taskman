@@ -33,12 +33,20 @@ def _memberships_for_user(user_id: str):
     return rows_to_json(rows)
 
 
-def _user_payload(user: dict):
+def _user_payload(user: dict, memberships: list[dict] | None = None):
+    memberships = memberships or []
+    active_membership = None
+    if memberships:
+        active_tenant_id = user.get("active_tenant_id")
+        active_membership = next((membership for membership in memberships if membership.get("tenant_id") == active_tenant_id), None) or memberships[0]
     return row_to_json({
         "id": user["id"],
         "name": user["name"],
         "email": user["email"],
         "active_tenant_id": user.get("active_tenant_id"),
+        "role": active_membership.get("role") if active_membership else user.get("role"),
+        "tenant_name": active_membership.get("tenant_name") if active_membership else user.get("tenant_name"),
+        "tenant_slug": active_membership.get("tenant_slug") if active_membership else user.get("tenant_slug"),
     })
 
 
@@ -59,11 +67,12 @@ def signup(payload: SignupRequest):
                 )
                 user = cur.fetchone()
 
+    memberships = _memberships_for_user(str(user["id"]))
     return {
         "access_token": create_token(str(user["id"])),
         "token_type": "bearer",
-        "user": _user_payload(user),
-        "memberships": [],
+        "user": _user_payload(user, memberships),
+        "memberships": memberships,
     }
 
 
@@ -76,17 +85,19 @@ def login(payload: LoginRequest):
     )
     if not row or not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    memberships = _memberships_for_user(str(row["id"]))
     return {
         "access_token": create_token(str(row["id"])),
         "token_type": "bearer",
-        "user": _user_payload(row),
-        "memberships": _memberships_for_user(str(row["id"])),
+        "user": _user_payload(row, memberships),
+        "memberships": memberships,
     }
 
 
 @router.get("/me")
 def me(current_user: dict = Depends(get_current_user)):
+    memberships = _memberships_for_user(str(current_user["id"]))
     return {
-        "user": _user_payload(current_user),
-        "memberships": _memberships_for_user(str(current_user["id"])),
+        "user": _user_payload(current_user, memberships),
+        "memberships": memberships,
     }

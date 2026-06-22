@@ -28,14 +28,22 @@ def _memberships_for_user(user_id: str):
 
 @router.get("/me")
 def me(current_user: dict = Depends(get_current_user)):
+    memberships = _memberships_for_user(str(current_user["id"]))
+    active_membership = None
+    active_tenant_id = current_user.get("active_tenant_id")
+    if memberships:
+        active_membership = next((membership for membership in memberships if membership.get("tenant_id") == active_tenant_id), None) or memberships[0]
     return {
         "user": row_to_json({
             "id": current_user["id"],
             "name": current_user["name"],
             "email": current_user["email"],
             "active_tenant_id": current_user.get("active_tenant_id"),
+            "role": active_membership.get("role") if active_membership else current_user.get("role"),
+            "tenant_name": active_membership.get("tenant_name") if active_membership else current_user.get("tenant_name"),
+            "tenant_slug": active_membership.get("tenant_slug") if active_membership else current_user.get("tenant_slug"),
         }),
-        "memberships": _memberships_for_user(str(current_user["id"])),
+        "memberships": memberships,
     }
 
 
