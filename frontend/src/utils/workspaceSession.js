@@ -28,7 +28,7 @@ export function buildActiveWorkspaceContext({ user = null, memberships = [], pre
     user: {
       ...(user || {}),
       role: user?.role || preferred.role || null,
-      active_tenant_id: user?.active_tenant_id || preferred.tenant_id
+      active_tenant_id: preferred.tenant_id
     },
     tenant: {
       id: preferred.tenant_id,
@@ -79,4 +79,9 @@ export function buildInviteAcceptedSession(baseSession, inviteResult) {
     tenant: inviteTenant,
     memberships
   };
+}
+
+export function resolveCurrentWorkspaceRole({ user = null, memberships = [], activeTenantId = null } = {}) {
+  const active = pickPreferredMembership(memberships, activeTenantId || user?.active_tenant_id || null);
+  return String(user?.role || active?.role || '').toUpperCase() || null;
 }

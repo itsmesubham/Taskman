@@ -1,0 +1,62 @@
+    1: from fastapi import APIRouter, Depends, HTTPException
+    1: from pydantic import BaseModel
+    1: from ..database import fetch_one, get_conn
+    1: from ..security import create_token, get_current_user
+    1: from ..services.memberships import active_membership_for_user, memberships_for_user
+    1: from ..utils import row_to_json, rows_to_json
+       
+    1: router = APIRouter(prefix="/api/users", tags=["users"])
+       
+       
+    7: class ActiveTenantRequest(BaseModel):
+    2:     tenant_id: str
+       
+       
+    2: @router.get("/me")
+    3: def me(current_user: dict = Depends(get_current_user)):
+    2:     memberships = rows_to_json(memberships_for_user(str(current_user["id"])))
+    2:     active_membership = active_membership_for_user(str(current_user["id"]), current_user.get("active_tenant_id"), memberships) if memberships else None
+    2:     return {
+    4:         "user": row_to_json({
+    2:             "id": current_user["id"],
+    2:             "name": current_user["name"],
+    2:             "email": current_user["email"],
+    2:             "active_tenant_id": current_user.get("active_tenant_id"),
+    2:             "role": active_membership.get("role") if active_membership else current_user.get("role"),
+    2:             "tenant_name": active_membership.get("tenant_name") if active_membership else current_user.get("tenant_name"),
+    2:             "tenant_slug": active_membership.get("tenant_slug") if active_membership else current_user.get("tenant_slug"),
+               }),
+    2:         "memberships": memberships,
+           }
+       
+       
+    2: @router.patch("/me/active-tenant")
+    3: def set_active_tenant(payload: ActiveTenantRequest, current_user: dict = Depends(get_current_user)):
+    6:     membership = fetch_one(
+    3:         """
+               SELECT tm.role, t.id, t.name, t.slug
+               FROM tenant_members tm
+               JOIN tenants t ON t.id = tm.tenant_id
+               WHERE tm.user_id = %s AND tm.tenant_id = %s
+               """,
+    3:         (current_user["id"], payload.tenant_id),
+           )
+    3:     if not membership:
+    1:         raise HTTPException(status_code=404, detail="Workspace membership not found")
+    4:     with get_conn() as conn:
+    4:         with conn.cursor() as cur:
+    4:             cur.execute(
+    2:                 "UPDATE users SET active_tenant_id = %s, updated_at = now() WHERE id = %s RETURNING active_tenant_id",
+    2:                 (payload.tenant_id, current_user["id"]),
+                   )
+    2:             updated = cur.fetchone()
+    2:     return {
+    2:         "active_tenant_id": updated["active_tenant_id"],
+    2:         "access_token": create_token(str(current_user["id"]), payload.tenant_id, membership["role"]),
+    2:         "tenant": row_to_json({"id": membership["id"], "name": membership["name"], "slug": membership["slug"]}),
+    4:         "membership": row_to_json({
+    2:             "tenant_id": payload.tenant_id,
+    2:             "role": membership["role"],
+               }),
+    2:         "memberships": rows_to_json(memberships_for_user(str(current_user["id"])))
+           }

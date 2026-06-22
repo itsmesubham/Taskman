@@ -1,0 +1,111 @@
+    1: from fastapi import APIRouter, Depends, HTTPException
+    1: from ..database import fetch_all, fetch_one
+    1: from ..security import get_current_user
+    1: from ..utils import row_to_json, rows_to_json
+       
+    1: router = APIRouter(prefix="/api/reports", tags=["reports"])
+       
+       
+    1: def resolve_tenant_id(current_user: dict) -> str:
+           tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+           if not tenant_id:
+               raise HTTPException(status_code=400, detail="Workspace not selected")
+           return str(tenant_id)
+       
+       
+    2: @router.get("/dashboard")
+    3: def dashboard(current_user: dict = Depends(get_current_user), project_id: str | None = None):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     params = [tenant_id]
+    1:     project_filter = ""
+    1:     if project_id:
+               project_filter = " AND project_id = %s"
+               params.append(project_id)
+       
+    2:     totals = fetch_one(
+    2:         f"""
+               SELECT
+                   COUNT(*) AS total_issues,
+                   COUNT(*) FILTER (WHERE status = 'DONE') AS done_issues,
+                   COUNT(*) FILTER (WHERE status = 'BLOCKED') AS blocked_issues,
+                   COUNT(*) FILTER (WHERE priority IN ('HIGH', 'URGENT')) AS high_priority_issues,
+                   COUNT(*) FILTER (WHERE due_date IS NOT NULL AND due_date < CURRENT_DATE AND status != 'DONE') AS overdue_issues,
+                   COALESCE(SUM(story_points), 0) AS total_points,
+                   COALESCE(SUM(story_points) FILTER (WHERE status = 'DONE'), 0) AS done_points
+               FROM issues
+    1:         WHERE tenant_id = %s {project_filter}
+               """,
+    1:         tuple(params),
+           )
+    1:     projects = fetch_one("SELECT COUNT(*) AS total_projects FROM projects WHERE tenant_id = %s AND status != 'ARCHIVED'", (tenant_id,))
+    2:     active_sprints = fetch_all(
+    1:         """
+               SELECT s.id, s.tenant_id, s.project_id, s.name, s.goal, s.status, s.start_date, s.end_date, s.created_at, s.updated_at,
+                      p.key AS project_key,
+                      COUNT(i.id) AS issue_count,
+                      COUNT(i.id) FILTER (WHERE i.status = 'DONE') AS done_count
+               FROM sprints s
+               JOIN projects p ON p.id = s.project_id
+               LEFT JOIN issues i ON i.sprint_id = s.id
+               WHERE s.tenant_id = %s AND s.status = 'ACTIVE'
+               GROUP BY s.id, p.key
+               ORDER BY s.created_at DESC
+               """,
+    1:         (tenant_id,),
+           )
+    1:     status_distribution = fetch_all("SELECT status, COUNT(*) AS count FROM issues WHERE tenant_id = %s GROUP BY status ORDER BY status", (tenant_id,))
+    1:     priority_distribution = fetch_all("SELECT priority, COUNT(*) AS count FROM issues WHERE tenant_id = %s GROUP BY priority ORDER BY priority", (tenant_id,))
+    2:     assignee_workload = fetch_all(
+    1:         """
+               SELECT u.id, u.name, COUNT(i.id) AS issue_count, COALESCE(SUM(i.story_points), 0) AS story_points
+               FROM issues i
+               LEFT JOIN users u ON u.id = i.assignee_id
+               WHERE i.tenant_id = %s AND i.status != 'DONE'
+               GROUP BY u.id, u.name
+               ORDER BY issue_count DESC
+               LIMIT 20
+               """,
+    1:         (tenant_id,),
+           )
+    2:     recent_activity = fetch_all(
+    1:         """
+               SELECT ae.*, u.name AS actor_name
+               FROM activity_events ae
+               LEFT JOIN users u ON u.id = ae.actor_id
+               WHERE ae.tenant_id = %s
+               ORDER BY ae.created_at DESC
+               LIMIT 25
+               """,
+    1:         (tenant_id,),
+           )
+    1:     return {
+    1:         "summary": row_to_json({**totals, **projects}),
+    1:         "active_sprints": rows_to_json(active_sprints),
+    1:         "status_distribution": rows_to_json(status_distribution),
+    1:         "priority_distribution": rows_to_json(priority_distribution),
+    1:         "assignee_workload": rows_to_json(assignee_workload),
+    1:         "recent_activity": rows_to_json(recent_activity),
+           }
+       
+       
+    2: @router.get("/sprint/{sprint_id}")
+    3: def sprint_report(sprint_id: str, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     sprint = fetch_one("SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_at, updated_at FROM sprints WHERE id = %s AND tenant_id = %s", (sprint_id, tenant_id))
+    1:     if not sprint:
+               raise HTTPException(status_code=404, detail="Sprint not found")
+    2:     summary = fetch_one(
+    1:         """
+               SELECT
+                   COUNT(*) AS total_issues,
+                   COUNT(*) FILTER (WHERE status = 'DONE') AS done_issues,
+                   COUNT(*) FILTER (WHERE status = 'BLOCKED') AS blocked_issues,
+                   COALESCE(SUM(story_points), 0) AS total_points,
+                   COALESCE(SUM(story_points) FILTER (WHERE status = 'DONE'), 0) AS done_points
+               FROM issues
+               WHERE tenant_id = %s AND sprint_id = %s
+               """,
+    1:         (tenant_id, sprint_id),
+           )
+    1:     by_status = fetch_all("SELECT status, COUNT(*) AS count FROM issues WHERE tenant_id = %s AND sprint_id = %s GROUP BY status", (tenant_id, sprint_id))
+    1:     return {"sprint": row_to_json(sprint), "summary": row_to_json(summary), "by_status": rows_to_json(by_status)}

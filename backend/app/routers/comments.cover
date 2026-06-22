@@ -1,0 +1,64 @@
+    1: from fastapi import APIRouter, Depends, HTTPException
+    1: from pydantic import BaseModel, Field
+    1: from ..database import fetch_all, fetch_one, execute
+    1: from ..security import get_current_user
+    1: from ..utils import row_to_json, rows_to_json
+    1: from ..services.activity import record_activity
+    1: from ..sse import event_bus
+       
+    1: router = APIRouter(prefix="/api/issues/{issue_id}/comments", tags=["comments"])
+       
+       
+    8: class CommentCreate(BaseModel):
+    3:     body: str = Field(min_length=1, max_length=5000)
+       
+       
+    1: def ensure_issue(issue_id: str, tenant_id: str):
+           issue = fetch_one(
+               "SELECT id, tenant_id, project_id, sprint_id, issue_key, title, description, issue_type, status, priority, assignee_id, reporter_id, story_points, due_date, labels, position, created_at, updated_at FROM issues WHERE id = %s AND tenant_id = %s",
+               (issue_id, tenant_id),
+           )
+           if not issue:
+               raise HTTPException(status_code=404, detail="Issue not found")
+           return issue
+       
+       
+    1: def resolve_tenant_id(current_user: dict) -> str:
+           tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+           if not tenant_id:
+               raise HTTPException(status_code=400, detail="Workspace not selected")
+           return str(tenant_id)
+       
+       
+    2: @router.get("")
+    3: def list_comments(issue_id: str, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     ensure_issue(issue_id, tenant_id)
+    2:     rows = fetch_all(
+    1:         """
+               SELECT c.*, u.name AS author_name, u.email AS author_email
+               FROM comments c
+               LEFT JOIN users u ON u.id = c.author_id
+               WHERE c.issue_id = %s AND c.tenant_id = %s
+               ORDER BY c.created_at ASC
+               """,
+    1:         (issue_id, tenant_id),
+           )
+    1:     return {"comments": rows_to_json(rows)}
+       
+       
+    2: @router.post("")
+    3: async def add_comment(issue_id: str, payload: CommentCreate, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     issue = ensure_issue(issue_id, tenant_id)
+    2:     comment = execute(
+    1:         """
+               INSERT INTO comments (tenant_id, issue_id, author_id, body)
+               VALUES (%s, %s, %s, %s)
+               RETURNING *
+               """,
+    1:         (tenant_id, issue_id, current_user["id"], payload.body.strip()),
+           )
+    1:     record_activity(tenant_id, current_user["id"], "comment_created", f"Commented on {issue['issue_key']}", project_id=issue["project_id"], issue_id=issue_id, metadata={"comment_id": str(comment["id"])})
+    1:     await event_bus.publish(tenant_id, "comment_created", {"issue_id": issue_id, "comment": row_to_json(comment)})
+    1:     return {"comment": row_to_json(comment)}

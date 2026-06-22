@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { applyThemeToDocument, getResolvedTheme, readStoredThemePreference, THEME_STORAGE_KEY } from '../utils/theme.js';
+import { applyThemeToDocument, getResolvedTheme, nextThemePreference, readStoredThemePreference, normalizeThemePreference, THEME_STORAGE_KEY } from '../utils/theme.js';
 
 const ThemeContext = createContext(null);
 
@@ -11,11 +11,6 @@ export function ThemeProvider({ children }) {
     const nextResolved = getResolvedTheme(themePreference);
     setResolvedTheme(nextResolved);
     applyThemeToDocument(nextResolved);
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, themePreference);
-    } catch {
-      // ignore storage failures
-    }
   }, [themePreference]);
 
   useEffect(() => {
@@ -34,16 +29,23 @@ export function ThemeProvider({ children }) {
     return () => media.removeListener(onChange);
   }, [themePreference]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, themePreference);
+    } catch {
+      // ignore storage failures
+    }
+    return undefined;
+  }, [themePreference]);
+
   const setThemePreference = useCallback((nextPreference) => {
-    const preference = ['light', 'dark', 'system'].includes(nextPreference) ? nextPreference : 'system';
+    const preference = normalizeThemePreference(nextPreference);
     setThemePreferenceState(preference);
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setThemePreferenceState((current) => {
-      if (current === 'system') return 'light';
-      return current === 'light' ? 'dark' : 'system';
-    });
+    setThemePreferenceState((current) => nextThemePreference(current));
   }, []);
 
   const value = useMemo(() => ({

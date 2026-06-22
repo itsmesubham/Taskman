@@ -1,0 +1,18 @@
+    1: from fastapi import APIRouter, Depends
+    1: from ..security import get_current_user
+    1: from ..services.workspace_defaults import ensure_workspace_board_defaults, get_workspace_sprint_schedule
+       
+    1: router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
+       
+       
+    2: @router.get("/board")
+    3: def board_defaults(current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    1:     defaults = ensure_workspace_board_defaults(tenant_id)
+    1:     return defaults
+       
+       
+    2: @router.get("/schedule")
+    3: def schedule(current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    1:     return get_workspace_sprint_schedule(tenant_id)

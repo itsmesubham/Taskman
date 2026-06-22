@@ -1,0 +1,129 @@
+    1: from datetime import datetime, timedelta, timezone
+    1: from typing import Any
+    1: import bcrypt
+    1: import jwt
+    1: from fastapi import Depends, HTTPException, Request, status
+    1: from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+    1: from .config import get_settings
+    1: from .database import fetch_all, fetch_one
+    1: from .services.memberships import memberships_for_user
+       
+    1: bearer = HTTPBearer(auto_error=False)
+       
+       
+    1: def hash_password(password: str) -> str:
+           return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+       
+       
+    1: def verify_password(password: str, password_hash: str) -> bool:
+           try:
+               return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+           except Exception:
+               return False
+       
+       
+    1: def create_token(user_id: str, tenant_id: str | None = None, role: str | None = None) -> str:
+    1:     settings = get_settings()
+    1:     now = datetime.now(timezone.utc)
+    1:     payload = {
+    1:         "sub": user_id,
+    1:         "iat": int(now.timestamp()),
+    1:         "exp": int((now + timedelta(minutes=settings.access_token_expire_minutes)).timestamp()),
+           }
+    1:     if tenant_id:
+    1:         payload["tenant_id"] = tenant_id
+    1:     if role:
+    1:         payload["role"] = role
+    1:     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+       
+       
+    1: def decode_token(token: str) -> dict[str, Any]:
+           try:
+               return jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
+           except jwt.ExpiredSignatureError:
+               raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+           except jwt.InvalidTokenError:
+               raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+       
+       
+    5: def get_current_user(
+    1:     request: Request,
+    2:     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    1: ) -> dict[str, Any]:
+    3:     token = None
+    3:     if credentials and credentials.scheme.lower() == "bearer":
+               token = credentials.credentials
+    3:     if not token:
+    3:         token = request.query_params.get("token")
+    3:     if not token:
+               raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing auth token")
+       
+    3:     payload = decode_token(token)
+    3:     user_id = payload.get("sub")
+    3:     tenant_id = payload.get("tenant_id")
+    3:     if not user_id:
+               raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+       
+    3:     if tenant_id:
+    2:         row = fetch_one(
+    1:             """
+                   SELECT u.id, u.name, u.email, u.active_tenant_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+                   FROM users u
+                   JOIN tenant_members tm ON tm.user_id = u.id
+                   JOIN tenants t ON t.id = tm.tenant_id
+                   WHERE u.id = %s AND tm.tenant_id = %s
+                   """,
+    1:             (user_id, tenant_id),
+               )
+    1:         if not row:
+                   raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not a tenant member")
+    1:         return row
+       
+    4:     active_row = fetch_one(
+    2:         """
+               SELECT u.id, u.name, u.email, u.active_tenant_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+               FROM users u
+               LEFT JOIN tenant_members tm ON tm.user_id = u.id AND tm.tenant_id = u.active_tenant_id
+               LEFT JOIN tenants t ON t.id = tm.tenant_id
+               WHERE u.id = %s
+               """,
+    2:         (user_id,),
+           )
+    2:     if not active_row:
+               raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    2:     if active_row["tenant_id"]:
+               return active_row
+       
+    2:     memberships = memberships_for_user(user_id)
+    2:     if len(memberships) == 1:
+    1:         membership = memberships[0]
+    3:         return {
+    1:             **active_row,
+    1:             "tenant_id": membership["tenant_id"],
+    1:             "role": membership["role"],
+    1:             "tenant_name": membership["tenant_name"],
+    1:             "tenant_slug": membership["tenant_slug"],
+               }
+       
+    3:     return {
+    1:         **active_row,
+    1:         "tenant_id": None,
+    1:         "role": None,
+    1:         "tenant_name": None,
+    1:         "tenant_slug": None,
+           }
+       
+       
+    1: def require_role(*roles: str):
+    7:     allowed = set(roles)
+       
+   14:     def dependency(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+               if current_user["role"] not in allowed:
+                   raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+               return current_user
+       
+    7:     return dependency
+       
+       
+    1: def normalize_email(email: str) -> str:
+    3:     return email.strip().lower()

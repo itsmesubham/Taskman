@@ -1,20 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
-
-function extractInviteCode(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  try {
-    if (raw.includes('://')) {
-      const url = new URL(raw);
-      const match = url.pathname.match(/\/(?:invite|join)\/([^/?#]+)/i);
-      return match ? decodeURIComponent(match[1]) : raw;
-    }
-  } catch {
-    // fall through
-  }
-  return raw.replace(/^\/+(invite|join)\//i, '').replace(/^\/+/, '');
-}
+import { extractInviteCode } from '../utils/invite.js';
 
 export default function TenantOnboarding() {
   const { createWorkspace, api, acceptInvite, navigate } = useWorkspace();

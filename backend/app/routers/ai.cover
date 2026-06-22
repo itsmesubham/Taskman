@@ -1,0 +1,194 @@
+    1: from fastapi import APIRouter, Depends, HTTPException
+    1: from pydantic import BaseModel, Field
+    1: from ..database import fetch_all, fetch_one
+    1: from ..security import get_current_user
+    1: from ..utils import rows_to_json, row_to_json
+       
+    1: router = APIRouter(prefix="/api/ai", tags=["ai"])
+       
+       
+   10: class BreakdownRequest(BaseModel):
+    3:     prompt: str = Field(min_length=3, max_length=5000)
+    3:     project_id: str | None = None
+       
+       
+   12: class SprintPlanRequest(BaseModel):
+    2:     project_id: str
+    3:     sprint_id: str | None = None
+    3:     capacity_points: int = Field(default=30, ge=1, le=300)
+       
+       
+   10: class AcceptanceCriteriaRequest(BaseModel):
+    3:     title: str = Field(min_length=3, max_length=240)
+    3:     description: str = ""
+       
+       
+    1: def split_theme(prompt: str) -> list[str]:
+    4:     words = [w.strip(".,;:!?()[]{}") for w in prompt.split() if len(w.strip(".,;:!?()[]{}")) > 2]
+    1:     unique = []
+    4:     for word in words:
+    3:         value = word.lower()
+    3:         if value not in unique:
+    3:             unique.append(value)
+    1:     return unique[:8] or ["requirements", "implementation", "testing"]
+       
+       
+    1: def resolve_tenant_id(current_user: dict) -> str:
+           tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+           if not tenant_id:
+               raise HTTPException(status_code=400, detail="Workspace not selected")
+           return str(tenant_id)
+       
+       
+    2: @router.post("/breakdown")
+    3: def breakdown(payload: BreakdownRequest, current_user: dict = Depends(get_current_user)):
+    1:     themes = split_theme(payload.prompt)
+    1:     core_title = payload.prompt.strip().rstrip(".")
+    1:     tasks = [
+    1:         {
+    1:             "title": f"Clarify requirements for {core_title}",
+    1:             "issue_type": "TASK",
+    1:             "priority": "HIGH",
+    1:             "story_points": 3,
+    1:             "acceptance_criteria": [
+                       "Business goal is documented",
+                       "Main users and edge cases are identified",
+                       "Out-of-scope items are listed",
+                   ],
+               },
+    1:         {
+    1:             "title": f"Design backend model and API for {core_title}",
+    1:             "issue_type": "STORY",
+    1:             "priority": "HIGH",
+    1:             "story_points": 5,
+    1:             "acceptance_criteria": [
+                       "Database model supports the required workflow",
+                       "API validates inputs and enforces tenant isolation",
+                       "Failure responses are clear and consistent",
+                   ],
+               },
+    1:         {
+    1:             "title": f"Build user workflow for {core_title}",
+    1:             "issue_type": "STORY",
+    1:             "priority": "MEDIUM",
+    1:             "story_points": 5,
+    1:             "acceptance_criteria": [
+                       "User can complete the main workflow without manual backend changes",
+                       "Important states are visible in the UI",
+                       "Empty and error states are handled",
+                   ],
+               },
+    1:         {
+    1:             "title": f"Add validation and permission checks for {core_title}",
+    1:             "issue_type": "TASK",
+    1:             "priority": "HIGH",
+    1:             "story_points": 3,
+    1:             "acceptance_criteria": [
+                       "Only authorized users can modify data",
+                       "Invalid transitions are blocked",
+                       "Tenant data cannot leak across workspaces",
+                   ],
+               },
+    1:         {
+    1:             "title": f"Test and release {core_title}",
+    1:             "issue_type": "TASK",
+    1:             "priority": "MEDIUM",
+    1:             "story_points": 3,
+    1:             "acceptance_criteria": [
+                       "Happy path is tested",
+                       "Important edge cases are tested",
+                       "Deployment notes are documented",
+                   ],
+               },
+           ]
+    1:     risks = [
+               "Requirements may be too broad; split into smaller issues before sprint start.",
+               "Permission and tenant-isolation bugs can be costly; test these early.",
+               "Avoid starting UI polish before core workflow is stable.",
+           ]
+    1:     return {"mode": "heuristic", "themes": themes, "tasks": tasks, "risks": risks}
+       
+       
+    2: @router.post("/acceptance-criteria")
+    3: def acceptance_criteria(payload: AcceptanceCriteriaRequest, current_user: dict = Depends(get_current_user)):
+    1:     title = payload.title.strip()
+    1:     criteria = [
+    1:         f"Given a valid user, when they use '{title}', then the expected business outcome is completed successfully.",
+    1:         "Invalid inputs return clear validation errors without saving partial data.",
+    1:         "The workflow respects tenant isolation and role permissions.",
+    1:         "Relevant activity is recorded for audit and collaboration.",
+    1:         "The feature handles empty, loading, and error states gracefully.",
+           ]
+    1:     return {"mode": "heuristic", "acceptance_criteria": criteria}
+       
+       
+    2: @router.post("/sprint-plan")
+    3: def sprint_plan(payload: SprintPlanRequest, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     project = fetch_one("SELECT id FROM projects WHERE id = %s AND tenant_id = %s", (payload.project_id, tenant_id))
+    1:     if not project:
+               return {"mode": "heuristic", "selected_issues": [], "message": "Project not found"}
+    2:     rows = fetch_all(
+    1:         """
+               SELECT id, tenant_id, project_id, issue_key, title, status, priority, story_points, sprint_id, assignee_id, due_date, created_at
+               FROM issues
+               WHERE tenant_id = %s AND project_id = %s AND sprint_id IS NULL AND status = 'BACKLOG'
+               ORDER BY
+                 CASE priority WHEN 'URGENT' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,
+                 created_at ASC
+               """,
+    1:         (tenant_id, payload.project_id),
+           )
+    1:     selected = []
+    1:     total = 0
+    2:     for issue in rows:
+    1:         points = int(issue["story_points"] or 1)
+    1:         if total + points <= payload.capacity_points:
+    1:             selected.append(issue)
+    1:             total += points
+    1:     return {
+    1:         "mode": "heuristic",
+    1:         "capacity_points": payload.capacity_points,
+    1:         "planned_points": total,
+    1:         "selected_issues": rows_to_json(selected),
+    1:         "notes": [
+                   "Selection prioritizes urgent/high priority backlog items first.",
+                   "Review dependencies manually before starting the sprint.",
+                   "Keep 15-20% capacity buffer for bugs and operational work.",
+               ],
+           }
+       
+       
+    2: @router.post("/sprint-insights")
+    3: def sprint_insights(payload: SprintPlanRequest, current_user: dict = Depends(get_current_user)):
+    1:     if not payload.sprint_id:
+               return {"mode": "heuristic", "insights": ["Select a sprint to get sprint-specific insights."]}
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     sprint = fetch_one("SELECT id, name FROM sprints WHERE id = %s AND tenant_id = %s", (payload.sprint_id, tenant_id))
+    1:     if not sprint:
+               return {"mode": "heuristic", "insights": ["Sprint not found."]}
+    2:     summary = fetch_one(
+    1:         """
+               SELECT COUNT(*) AS total,
+                      COUNT(*) FILTER (WHERE status = 'DONE') AS done,
+                      COUNT(*) FILTER (WHERE status = 'BLOCKED') AS blocked,
+                      COALESCE(SUM(story_points), 0) AS points,
+                      COALESCE(SUM(story_points) FILTER (WHERE status = 'DONE'), 0) AS done_points
+               FROM issues WHERE tenant_id = %s AND sprint_id = %s
+               """,
+    1:         (tenant_id, payload.sprint_id),
+           )
+    1:     total = summary["total"] or 0
+    1:     done = summary["done"] or 0
+    1:     blocked = summary["blocked"] or 0
+    1:     completion = round((done / total) * 100, 1) if total else 0
+    1:     insights = [f"Sprint completion is {completion}% based on completed issue count."]
+    1:     if blocked:
+               insights.append(f"There are {blocked} blocked issues; unblock these before pulling new work.")
+    1:     if total and completion < 40:
+               insights.append("Completion is low; reduce scope or focus the team on high-priority work.")
+    1:     if summary["points"] and summary["done_points"] < summary["points"] * 0.5:
+               insights.append("Less than half of story points are done; review estimates and dependencies.")
+    1:     if not insights:
+               insights.append("Sprint looks healthy based on current issue distribution.")
+    1:     return {"mode": "heuristic", "sprint": row_to_json(sprint), "summary": row_to_json(summary), "insights": insights}

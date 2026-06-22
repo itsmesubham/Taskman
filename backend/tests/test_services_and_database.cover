@@ -1,0 +1,443 @@
+    1: import json
+    1: import sys
+    1: import types
+    1: import unittest
+    1: from datetime import date
+    1: from unittest.mock import MagicMock, patch
+       
+    1: if "psycopg" not in sys.modules:
+           psycopg = types.ModuleType("psycopg")
+           psycopg_rows = types.ModuleType("psycopg.rows")
+           psycopg_rows.dict_row = object()
+           psycopg.rows = psycopg_rows
+           sys.modules["psycopg"] = psycopg
+           sys.modules["psycopg.rows"] = psycopg_rows
+       
+    1: if "psycopg_pool" not in sys.modules:
+           psycopg_pool = types.ModuleType("psycopg_pool")
+       
+           class ConnectionPool:  # pragma: no cover - stub for unit tests
+               def __init__(self, *args, **kwargs):
+                   self.args = args
+                   self.kwargs = kwargs
+                   self.closed = False
+                   self._conn = None
+       
+               def connection(self):
+                   return self._conn
+       
+               def close(self):
+                   self.closed = True
+       
+           psycopg_pool.ConnectionPool = ConnectionPool
+           sys.modules["psycopg_pool"] = psycopg_pool
+       
+    1: from app import database
+    1: from app.services.activity import record_activity
+    1: from app.services.memberships import active_membership_for_user, memberships_for_user
+    1: from app.services.workspace_defaults import (
+           _month_bounds,
+           _month_name,
+           _next_month_start,
+           ensure_current_monthly_sprint,
+           ensure_default_project,
+           ensure_workspace_board_defaults,
+           ensure_workspace_invite,
+           get_workspace_sprint_schedule,
+           invite_url_for_tenant,
+       )
+       
+       
+    2: class FakeCursor:
+    1:     def __init__(self, execute_fn):
+   10:         self.execute_fn = execute_fn
+   10:         self.executed = []
+   10:         self.fetchone_result = None
+   10:         self.fetchall_result = []
+   10:         self.description = None
+       
+    1:     def __enter__(self):
+   11:         return self
+       
+    1:     def __exit__(self, exc_type, exc, tb):
+   11:         return False
+       
+    1:     def execute(self, query, params=()):
+   21:         self.executed.append((query, params))
+   21:         result = self.execute_fn(query, params)
+   20:         if isinstance(result, dict) and result.get("fetchall") is not None:
+                   self.fetchall_result = result["fetchall"]
+                   self.fetchone_result = result.get("fetchone")
+                   self.description = result.get("description")
+                   return
+   20:         self.fetchone_result = result
+   20:         self.description = [1] if result is not None else None
+       
+    1:     def fetchone(self):
+   12:         return self.fetchone_result
+       
+    1:     def fetchall(self):
+    1:         return self.fetchall_result
+       
+       
+    2: class FakeConn:
+    1:     def __init__(self, execute_fn):
+   10:         self.cursor_obj = FakeCursor(execute_fn)
+   10:         self.committed = False
+   10:         self.rolled_back = False
+       
+    1:     def cursor(self):
+   11:         return self.cursor_obj
+       
+    1:     def commit(self):
+    4:         self.committed = True
+       
+    1:     def rollback(self):
+               self.rolled_back = True
+       
+       
+    2: class FakeConnContext:
+    1:     def __init__(self, execute_fn):
+   10:         self.conn = FakeConn(execute_fn)
+       
+    1:     def __enter__(self):
+   11:         return self.conn
+       
+    1:     def __exit__(self, exc_type, exc, tb):
+   11:         return False
+       
+       
+    2: class FakePool:
+    1:     def __init__(self, execute_fn):
+    1:         self.execute_fn = execute_fn
+    1:         self.closed = False
+       
+    1:     def connection(self):
+    4:         return FakeConnContext(self.execute_fn)
+       
+    1:     def close(self):
+               self.closed = True
+       
+       
+    2: class ServiceAndDatabaseTests(unittest.TestCase):
+    1:     def test_month_helpers_cover_boundaries(self):
+    1:         self.assertEqual(_month_bounds(date(2024, 2, 29)), (date(2024, 2, 1), date(2024, 2, 29)))
+    1:         self.assertEqual(_next_month_start(date(2026, 12, 15)), date(2027, 1, 1))
+    1:         self.assertEqual(_month_name(date(2026, 6, 23)), "June 2026")
+       
+    1:     def test_memberships_query_and_selection(self):
+    1:         rows = [
+    1:             {"tenant_id": "t1", "role": "MEMBER", "tenant_name": "One", "tenant_slug": "one"},
+    1:             {"tenant_id": "t2", "role": "OWNER", "tenant_name": "Two", "tenant_slug": "two"},
+               ]
+    2:         with patch("app.services.memberships.fetch_all", return_value=rows) as mock_fetch_all:
+    1:             result = memberships_for_user("user-1")
+    1:             self.assertEqual(result, rows)
+    1:             mock_fetch_all.assert_called_once()
+    1:         self.assertEqual(active_membership_for_user("user-1", "t2", rows)["tenant_id"], "t2")
+    1:         self.assertEqual(active_membership_for_user("user-1", None, rows)["tenant_id"], "t1")
+    1:         self.assertIsNone(active_membership_for_user("user-1", None, []))
+       
+    1:     def test_record_activity_serializes_metadata(self):
+    1:         captured = {}
+       
+    1:         def fake_execute(query, params):
+    1:             captured["query"] = query
+    1:             captured["params"] = params
+    1:             return {"id": "event-1"}
+       
+    2:         with patch("app.services.activity.execute", side_effect=fake_execute):
+    2:             result = record_activity(
+    1:                 "tenant-1",
+    1:                 "user-1",
+    1:                 "issue_created",
+    1:                 "Created issue",
+    1:                 project_id="project-1",
+    1:                 issue_id="issue-1",
+    1:                 sprint_id="sprint-1",
+    1:                 metadata={"score": 4, "tags": ["a", "b"]},
+                   )
+       
+    1:         self.assertEqual(result["id"], "event-1")
+    1:         self.assertIn("INSERT INTO activity_events", captured["query"])
+    1:         self.assertEqual(json.loads(captured["params"][-1]), {"score": 4, "tags": ["a", "b"]})
+       
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     def test_invite_url_and_invite_generation_are_idempotent(self, mock_fetch_one):
+    1:         mock_fetch_one.side_effect = [
+    1:             {"id": "tenant-1", "name": "Grabbit", "slug": "grabbit", "invite_code": None, "invite_enabled": True, "invite_created_at": None},
+    1:             None,
+               ]
+       
+    1:         def execute_fn(query, params=()):
+    1:             normalized = " ".join(query.split()).lower()
+    1:             if normalized.startswith("update tenants set"):
+    1:                 return {"id": "tenant-1", "name": "Grabbit", "slug": "grabbit", "invite_code": "invite-1", "invite_enabled": True}
+                   return None
+       
+    2:         with patch("app.services.workspace_defaults._generate_invite_code", side_effect=["invite-1"]), patch("app.services.workspace_defaults.get_conn", return_value=FakeConnContext(execute_fn)):
+    1:             tenant = ensure_workspace_invite("tenant-1")
+    1:             self.assertEqual(tenant["invite_code"], "invite-1")
+    1:             self.assertEqual(invite_url_for_tenant(tenant), "/invite/invite-1")
+       
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     def test_invite_url_is_hidden_when_disabled(self, mock_fetch_one):
+    1:         self.assertEqual(invite_url_for_tenant({"id": "tenant-1", "invite_code": "invite-1", "invite_enabled": False}), "")
+    1:         mock_fetch_one.assert_not_called()
+       
+    2:     @patch("app.services.workspace_defaults.get_conn")
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     def test_ensure_workspace_invite_reuses_existing_enabled_link(self, mock_fetch_one, mock_get_conn):
+    1:         tenant = {"id": "tenant-1", "name": "Grabbit", "slug": "grabbit", "invite_code": "invite-1", "invite_enabled": True, "invite_created_at": "2026-06-23T00:00:00+00:00"}
+    1:         mock_fetch_one.return_value = tenant
+    1:         result = ensure_workspace_invite("tenant-1")
+    1:         self.assertEqual(result, tenant)
+    1:         mock_fetch_one.assert_called_once()
+    1:         mock_get_conn.assert_not_called()
+       
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     def test_ensure_workspace_invite_retries_on_unique_conflict(self, mock_fetch_one):
+    1:         mock_fetch_one.side_effect = [
+    1:             {"id": "tenant-1", "name": "Grabbit", "slug": "grabbit", "invite_code": None, "invite_enabled": True, "invite_created_at": None},
+    1:             None,
+    1:             None,
+    1:             None,
+               ]
+       
+    2:         class UniqueViolation(Exception):
+    1:             sqlstate = "23505"
+       
+    1:         execute_calls = {"count": 0}
+       
+    1:         def execute_fn(query, params=()):
+    2:             normalized = " ".join(query.split()).lower()
+    2:             if normalized.startswith("update tenants set"):
+    2:                 execute_calls["count"] += 1
+    2:                 if execute_calls["count"] == 1:
+    1:                     raise UniqueViolation()
+    1:                 return {"id": "tenant-1", "name": "Grabbit", "slug": "grabbit", "invite_code": "invite-2", "invite_enabled": True}
+                   return None
+       
+    2:         with patch("app.services.workspace_defaults._generate_invite_code", side_effect=["invite-1", "invite-2"]), patch("app.services.workspace_defaults.get_conn", return_value=FakeConnContext(execute_fn)):
+    1:             result = ensure_workspace_invite("tenant-1", force_new=True)
+       
+    1:         self.assertEqual(result["invite_code"], "invite-2")
+    1:         self.assertEqual(execute_calls["count"], 2)
+       
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     def test_ensure_default_project_reuses_existing_project(self, mock_fetch_one):
+    1:         mock_fetch_one.side_effect = [
+    1:             {"name": "Grabbit"},
+    1:             {"id": "project-1", "tenant_id": "tenant-1", "key": "GRABBIT", "name": "Grabbit"},
+               ]
+    1:         project = ensure_default_project("tenant-1")
+    1:         self.assertEqual(project["id"], "project-1")
+       
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     def test_ensure_default_project_creates_and_falls_back_on_race(self, mock_fetch_one):
+    1:         mock_fetch_one.side_effect = [
+    1:             {"name": "Grabbit"},
+    1:             None,
+    1:             {"id": "project-1", "tenant_id": "tenant-1", "key": "GRABBIT", "name": "Grabbit"},
+               ]
+       
+    1:         def execute_fn(query, params=()):
+    2:             normalized = " ".join(query.split()).lower()
+    2:             if normalized.startswith("insert into projects"):
+    1:                 return None
+    1:             if normalized.startswith("select id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at from projects where tenant_id = %s and key = %s limit 1"):
+    1:                 return {"id": "project-1", "tenant_id": "tenant-1", "key": "GRABBIT", "name": "Grabbit"}
+                   return None
+       
+    2:         with patch("app.services.workspace_defaults.get_conn", return_value=FakeConnContext(execute_fn)):
+    1:             project = ensure_default_project("tenant-1")
+       
+    1:         self.assertEqual(project["id"], "project-1")
+       
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     def test_ensure_current_monthly_sprint_returns_none_without_inputs(self, mock_fetch_one):
+    1:         self.assertIsNone(ensure_current_monthly_sprint("", "project-1"))
+    1:         self.assertIsNone(ensure_current_monthly_sprint("tenant-1", ""))
+    1:         mock_fetch_one.assert_not_called()
+       
+    2:     @patch("app.services.workspace_defaults.date")
+    2:     @patch("app.services.workspace_defaults.get_conn")
+    2:     def test_ensure_current_monthly_sprint_reactivates_existing_month(self, mock_get_conn, mock_date):
+    1:         mock_date.today.return_value = date(2026, 6, 23)
+    1:         mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+       
+    1:         def execute_fn(query, params=()):
+    4:             normalized = " ".join(query.split()).lower()
+    4:             if normalized.startswith("select pg_advisory_xact_lock"):
+    1:                 return None
+    3:             if normalized.startswith("update sprints set status = 'completed'"):
+    1:                 return None
+    2:             if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
+    1:                 return {"id": "sprint-1", "status": "PLANNED", "project_id": "project-1"}
+    1:             if normalized.startswith("update sprints set status = 'active'"):
+    1:                 return {"id": "sprint-1", "status": "ACTIVE", "project_id": "project-1"}
+                   return None
+       
+    1:         mock_get_conn.return_value = FakeConnContext(execute_fn)
+    1:         sprint = ensure_current_monthly_sprint("tenant-1", "project-1")
+    1:         self.assertEqual(sprint["status"], "ACTIVE")
+       
+    2:     @patch("app.services.workspace_defaults.date")
+    2:     @patch("app.services.workspace_defaults.get_conn")
+    2:     def test_ensure_current_monthly_sprint_creates_new_month_when_missing(self, mock_get_conn, mock_date):
+    1:         mock_date.today.return_value = date(2026, 7, 2)
+    1:         mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+       
+    1:         def execute_fn(query, params=()):
+    4:             normalized = " ".join(query.split()).lower()
+    4:             if normalized.startswith("select pg_advisory_xact_lock"):
+    1:                 return None
+    3:             if normalized.startswith("update sprints set status = 'completed'"):
+    1:                 return None
+    2:             if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
+    1:                 return None
+    1:             if normalized.startswith("insert into sprints"):
+    1:                 return {"id": "sprint-2", "status": "ACTIVE", "name": "July 2026", "project_id": "project-1"}
+                   return None
+       
+    1:         mock_get_conn.return_value = FakeConnContext(execute_fn)
+    1:         sprint = ensure_current_monthly_sprint("tenant-1", "project-1")
+    1:         self.assertEqual(sprint["id"], "sprint-2")
+    1:         self.assertEqual(sprint["status"], "ACTIVE")
+       
+    2:     @patch("app.services.workspace_defaults.date")
+    2:     @patch("app.services.workspace_defaults.get_conn")
+    2:     def test_ensure_current_monthly_sprint_completes_older_sprints_before_create(self, mock_get_conn, mock_date):
+    1:         mock_date.today.return_value = date(2026, 7, 2)
+    1:         mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+       
+    1:         calls = []
+       
+    1:         def execute_fn(query, params=()):
+    4:             normalized = " ".join(query.split()).lower()
+    4:             calls.append(normalized)
+    4:             if normalized.startswith("select pg_advisory_xact_lock"):
+    1:                 return None
+    3:             if normalized.startswith("update sprints set status = 'completed'"):
+    1:                 return None
+    2:             if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
+    1:                 return None
+    1:             if normalized.startswith("insert into sprints"):
+    1:                 return {"id": "sprint-2", "status": "ACTIVE", "name": "July 2026", "project_id": "project-1"}
+                   return None
+       
+    1:         mock_get_conn.return_value = FakeConnContext(execute_fn)
+    1:         sprint = ensure_current_monthly_sprint("tenant-1", "project-1")
+    1:         self.assertEqual(sprint["id"], "sprint-2")
+    4:         self.assertTrue(any("update sprints set status = 'completed'" in call for call in calls))
+       
+    2:     @patch("app.services.workspace_defaults.ensure_default_project")
+    2:     @patch("app.services.workspace_defaults.ensure_current_monthly_sprint")
+    2:     def test_workspace_defaults_bootstrap_uses_project_then_sprint(self, mock_sprint, mock_project):
+    1:         mock_project.return_value = {"id": "project-1"}
+    1:         mock_sprint.return_value = {"id": "sprint-1"}
+    1:         result = ensure_workspace_board_defaults("tenant-1")
+    1:         self.assertEqual(result["project"]["id"], "project-1")
+    1:         self.assertEqual(result["sprint"]["id"], "sprint-1")
+    1:         mock_project.assert_called_once_with("tenant-1")
+    1:         mock_sprint.assert_called_once_with("tenant-1", "project-1")
+       
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     @patch("app.services.workspace_defaults.ensure_current_monthly_sprint")
+    2:     def test_get_workspace_sprint_schedule_uses_default_project_and_current_sprint(self, mock_sprint, mock_fetch_one):
+    1:         mock_fetch_one.side_effect = [
+    1:             {"name": "Grabbit"},
+    1:             {"id": "project-1", "tenant_id": "tenant-1", "name": "Grabbit", "key": "GRABBIT"},
+    1:             {"id": "sprint-1", "project_id": "project-1", "name": "June 2026", "start_date": date(2026, 6, 1)},
+    1:             {"id": "sprint-1", "project_id": "project-1", "name": "June 2026", "start_date": date(2026, 6, 1)},
+    1:             {"id": "sprint-2", "project_id": "project-1", "name": "July 2026", "start_date": date(2026, 7, 1)},
+               ]
+    1:         mock_sprint.return_value = {"id": "sprint-1", "project_id": "project-1", "name": "June 2026", "status": "ACTIVE"}
+    1:         schedule = get_workspace_sprint_schedule("tenant-1")
+    1:         self.assertTrue(schedule["autoSprintEnabled"])
+    1:         self.assertEqual(schedule["defaultProject"]["id"], "project-1")
+    1:         self.assertEqual(schedule["currentSprint"]["id"], "sprint-1")
+       
+    2:     @patch("app.services.workspace_defaults.ensure_current_monthly_sprint")
+    2:     @patch("app.services.workspace_defaults.fetch_one")
+    2:     def test_get_workspace_sprint_schedule_uses_upcoming_sprint_when_present(self, mock_fetch_one, mock_sprint):
+    1:         def fetch_one_side_effect(query, params=()):
+    3:             normalized = " ".join(query.split()).lower()
+    3:             if normalized.startswith("select id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at from projects where id = %s and tenant_id = %s"):
+    1:                 return {"id": "project-1", "tenant_id": "tenant-1", "name": "Grabbit", "key": "GRABBIT"}
+    2:             if "order by created_at desc" in normalized:
+    1:                 return {"id": "sprint-last", "project_id": "project-1", "name": "June 2026", "start_date": date(2026, 6, 1)}
+    1:             if "start_date > %s" in normalized:
+    1:                 return {"id": "sprint-next", "project_id": "project-1", "name": "July 2026", "start_date": date(2026, 7, 1)}
+                   raise AssertionError(f"Unexpected query: {query}")
+       
+    1:         mock_fetch_one.side_effect = fetch_one_side_effect
+    1:         mock_sprint.return_value = {"id": "sprint-current", "project_id": "project-1", "name": "June 2026", "status": "ACTIVE"}
+       
+    1:         schedule = get_workspace_sprint_schedule("tenant-1", "project-1")
+       
+    1:         self.assertEqual(schedule["nextSprintName"], "July 2026")
+    1:         self.assertEqual(schedule["nextCreationDate"], "2026-07-01")
+    1:         self.assertEqual(schedule["currentSprint"]["id"], "sprint-current")
+    1:         self.assertEqual(schedule["lastCreatedSprint"]["id"], "sprint-last")
+       
+    1:     def test_database_fetch_and_execute_helpers_use_queries_and_commit(self):
+    1:         calls = []
+       
+    1:         def execute_fn(query, params):
+    4:             calls.append((query, params))
+    4:             if query.startswith("SELECT"):
+    2:                 return {"id": "row-1"}
+    2:             if "RETURNING" in query:
+    1:                 return {"ok": True}
+    1:             return None
+       
+    1:         pool = FakePool(execute_fn)
+    1:         original_pool = database.pool
+    1:         database.pool = pool
+    1:         try:
+    1:             row = database.fetch_one("SELECT * FROM table WHERE id = %s", ("1",))
+    1:             rows = database.fetch_all("SELECT * FROM table", ())
+    1:             result = database.execute("INSERT INTO table VALUES (%s) RETURNING *", ("x",))
+    1:             no_result = database.execute("UPDATE table SET x = 1", ())
+               finally:
+    1:             database.pool = original_pool
+       
+    1:         self.assertEqual(row, {"id": "row-1"})
+    1:         self.assertEqual(rows, [])
+    1:         self.assertEqual(result, {"ok": True})
+    1:         self.assertIsNone(no_result)
+    1:         self.assertGreaterEqual(len(calls), 4)
+       
+    1:     def test_database_init_and_close_pool(self):
+    2:         class PoolFactory:
+    1:             def __init__(self, *args, **kwargs):
+    1:                 self.args = args
+    1:                 self.kwargs = kwargs
+    1:                 self.closed = False
+       
+    1:             def close(self):
+    1:                 self.closed = True
+       
+    1:             def connection(self):
+                       raise AssertionError("not used")
+       
+    1:         original_pool = database.pool
+    1:         original_connection_pool = database.ConnectionPool
+    1:         original_settings = database.get_settings
+    1:         try:
+    1:             database.pool = None
+    1:             database.ConnectionPool = PoolFactory
+    2:             database.get_settings = lambda: types.SimpleNamespace(database_url="postgres://example")
+    1:             database.init_pool()
+    1:             self.assertIsNotNone(database.pool)
+    1:             database.close_pool()
+    1:             self.assertIsNone(database.pool)
+               finally:
+    1:             database.pool = original_pool
+    1:             database.ConnectionPool = original_connection_pool
+    1:             database.get_settings = original_settings
+       
+       
+    1: if __name__ == "__main__":
+           unittest.main()

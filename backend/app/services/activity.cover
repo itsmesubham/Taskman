@@ -1,0 +1,33 @@
+    1: from typing import Any
+    1: import json
+    1: from ..database import execute
+    1: from ..utils import serialize
+       
+       
+    1: def record_activity(
+           tenant_id: str,
+           actor_id: str | None,
+           event_type: str,
+           message: str,
+           project_id: str | None = None,
+           issue_id: str | None = None,
+           sprint_id: str | None = None,
+           metadata: dict[str, Any] | None = None,
+       ):
+    2:     return execute(
+    1:         """
+               INSERT INTO activity_events (tenant_id, project_id, issue_id, sprint_id, actor_id, event_type, message, metadata)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+               RETURNING *
+               """,
+    1:         (
+    1:             tenant_id,
+    1:             project_id,
+    1:             issue_id,
+    1:             sprint_id,
+    1:             actor_id,
+    1:             event_type,
+    1:             message,
+    1:             json.dumps(serialize(metadata or {})),
+               ),
+           )

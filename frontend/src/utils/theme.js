@@ -1,6 +1,10 @@
 export const THEME_STORAGE_KEY = 'taskman_theme';
 export const THEME_OPTIONS = ['light', 'dark', 'system'];
 
+export function normalizeThemePreference(value) {
+  return THEME_OPTIONS.includes(value) ? value : 'system';
+}
+
 export function getSystemTheme() {
   if (typeof window === 'undefined' || !window.matchMedia) return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -15,10 +19,17 @@ export function readStoredThemePreference() {
   if (typeof window === 'undefined') return 'system';
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return THEME_OPTIONS.includes(stored) ? stored : 'system';
+    return normalizeThemePreference(stored);
   } catch {
     return 'system';
   }
+}
+
+export function nextThemePreference(current) {
+  const preference = normalizeThemePreference(current);
+  if (preference === 'system') return 'light';
+  if (preference === 'light') return 'dark';
+  return 'system';
 }
 
 export function applyThemeToDocument(resolvedTheme) {

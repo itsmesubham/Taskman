@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
+import { resolveCurrentWorkspaceRole } from '../utils/workspaceSession.js';
 import { initials } from '../utils.js';
 
 const SHORTCUTS = [
@@ -29,7 +30,11 @@ export default function SettingsPage() {
   const [inviteLink, setInviteLink] = useState('');
   const [loadingInvite, setLoadingInvite] = useState(false);
   const activeMembership = memberships.find((membership) => membership.tenant_id === session.tenant?.id) || memberships[0] || null;
-  const currentRole = String(session.user?.role || activeMembership?.role || '').toUpperCase();
+  const currentRole = resolveCurrentWorkspaceRole({
+    user: session.user,
+    memberships,
+    activeTenantId: session.tenant?.id
+  });
   const isAdmin = currentRole === 'ADMIN';
   const isOwner = currentRole === 'OWNER';
   const canManageInvite = isAdmin || isOwner;

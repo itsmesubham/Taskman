@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiClient, DEFAULT_API_BASE, isSecureApiBase, normalizeApiBase } from '../api/client.js';
+import { extractInviteCode } from '../utils/invite.js';
 import { readJson, saveJson } from '../utils.js';
 import { buildActiveWorkspaceContext } from '../utils/workspaceSession.js';
 
@@ -45,8 +46,7 @@ export function WorkspaceProvider({ children }) {
   const [memberships, setMemberships] = useState([]);
   const [authStatus, setAuthStatus] = useState(session.token ? 'loading' : 'signed_out');
   const [inviteCode, setInviteCode] = useState(() => {
-    const match = window.location.pathname.match(/^\/(?:invite|join)\/([^/?#]+)/i);
-    return match ? decodeURIComponent(match[1]) : '';
+    return extractInviteCode(window.location.pathname);
   });
   const [inviteDetails, setInviteDetails] = useState(null);
   const [inviteError, setInviteError] = useState('');
@@ -88,8 +88,7 @@ export function WorkspaceProvider({ children }) {
 
   useEffect(() => {
     const syncInviteCode = () => {
-      const match = window.location.pathname.match(/^\/(?:invite|join)\/([^/?#]+)/i);
-      setInviteCode(match ? decodeURIComponent(match[1]) : '');
+      setInviteCode(extractInviteCode(window.location.pathname));
     };
     syncInviteCode();
     window.addEventListener('popstate', syncInviteCode);
@@ -132,8 +131,7 @@ export function WorkspaceProvider({ children }) {
 
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path);
-    const match = path.match(/^\/(?:invite|join)\/([^/?#]+)/i);
-    setInviteCode(match ? decodeURIComponent(match[1]) : '');
+    setInviteCode(extractInviteCode(path));
   }, []);
 
   const setActiveTenant = useCallback(async (tenantId, { silent = false, userOverride = null } = {}) => {
@@ -385,7 +383,7 @@ export function WorkspaceProvider({ children }) {
       source.close();
       setEventStatus('live');
     };
-  }, [loadWorkspace, session.apiBase, session.token]);
+  }, [session.apiBase, session.token]);
 
   const activeProject = projects.find((project) => project.id === activeProjectId) || null;
   const projectSprints = sprints.filter((sprint) => !activeProjectId || sprint.project_id === activeProjectId);

@@ -1,0 +1,390 @@
+    1: from fastapi import APIRouter, Depends, HTTPException, Query
+    1: from pydantic import BaseModel, Field
+    1: from typing import Any
+    1: from ..database import fetch_all, fetch_one, execute, get_conn
+    1: from ..security import get_current_user
+    1: from ..utils import row_to_json, rows_to_json
+    1: from ..services.activity import record_activity
+    1: from ..services.workspace_defaults import ensure_workspace_board_defaults, ensure_default_project, ensure_current_monthly_sprint
+    1: from ..sse import event_bus
+       
+    1: router = APIRouter(prefix="/api/issues", tags=["issues"])
+       
+    1: VALID_STATUSES = {"BACKLOG", "TODO", "IN_PROGRESS", "IN_REVIEW", "DONE", "BLOCKED"}
+    1: VALID_TYPES = {"TASK", "BUG", "STORY", "EPIC", "IMPROVEMENT"}
+    1: VALID_PRIORITIES = {"LOW", "MEDIUM", "HIGH", "URGENT"}
+       
+       
+   28: class IssueCreate(BaseModel):
+    3:     project_id: str | None = None
+    3:     title: str = Field(min_length=1, max_length=240)
+    3:     description: str = ""
+    3:     issue_type: str = "TASK"
+    3:     status: str = "BACKLOG"
+    3:     priority: str = "MEDIUM"
+    3:     sprint_id: str | None = None
+    3:     assignee_id: str | None = None
+    3:     story_points: int = Field(default=0, ge=0, le=100)
+    3:     due_date: str | None = None
+    3:     labels: list[str] = Field(default_factory=list)
+       
+       
+   30: class IssueUpdate(BaseModel):
+    3:     title: str | None = Field(default=None, max_length=240)
+    3:     description: str | None = None
+    3:     issue_type: str | None = None
+    3:     status: str | None = None
+    3:     priority: str | None = None
+    3:     project_id: str | None = None
+    3:     sprint_id: str | None = None
+    3:     assignee_id: str | None = None
+    3:     story_points: int | None = Field(default=None, ge=0, le=100)
+    3:     due_date: str | None = None
+    3:     labels: list[str] | None = None
+    3:     position: int | None = None
+       
+       
+   10: class StatusUpdate(BaseModel):
+    2:     status: str
+    3:     position: int | None = None
+       
+       
+   10: class SprintAssignment(BaseModel):
+    3:     sprint_id: str | None = None
+    3:     status: str | None = None
+       
+       
+   14: class ReorderItem(BaseModel):
+    2:     id: str
+    3:     status: str | None = None
+    2:     position: int
+    3:     sprint_id: str | None = None
+       
+       
+    7: class ReorderRequest(BaseModel):
+    2:     items: list[ReorderItem]
+       
+       
+    1: def validate_issue_values(issue_type: str | None = None, status: str | None = None, priority: str | None = None):
+    1:     if issue_type and issue_type not in VALID_TYPES:
+               raise HTTPException(status_code=400, detail="Invalid issue_type")
+    1:     if status and status not in VALID_STATUSES:
+               raise HTTPException(status_code=400, detail="Invalid status")
+    1:     if priority and priority not in VALID_PRIORITIES:
+               raise HTTPException(status_code=400, detail="Invalid priority")
+       
+       
+    1: def resolve_tenant_id(current_user: dict) -> str:
+           tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+           if not tenant_id:
+               raise HTTPException(status_code=400, detail="Workspace not selected")
+           return str(tenant_id)
+       
+       
+    1: def ensure_project(project_id: str, tenant_id: str):
+           project = fetch_one(
+               "SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s",
+               (project_id, tenant_id),
+           )
+           if not project:
+               raise HTTPException(status_code=404, detail="Project not found")
+           return project
+       
+       
+    1: def ensure_issue(issue_id: str, tenant_id: str):
+           issue = fetch_one(
+               "SELECT id, tenant_id, project_id, sprint_id, issue_key, title, description, issue_type, status, priority, assignee_id, reporter_id, story_points, due_date, labels, position, created_at, updated_at FROM issues WHERE id = %s AND tenant_id = %s",
+               (issue_id, tenant_id),
+           )
+           if not issue:
+               raise HTTPException(status_code=404, detail="Issue not found")
+           return issue
+       
+       
+    1: def ensure_sprint(sprint_id: str | None, tenant_id: str, project_id: str):
+           if not sprint_id:
+               return None
+           sprint = fetch_one(
+               "SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at FROM sprints WHERE id = %s AND tenant_id = %s AND project_id = %s",
+               (sprint_id, tenant_id, project_id),
+           )
+           if not sprint:
+               raise HTTPException(status_code=404, detail="Sprint not found")
+           return sprint
+       
+       
+    1: def ensure_project_for_task(tenant_id: str, project_id: str | None):
+           if project_id:
+               return ensure_project(project_id, tenant_id)
+           return ensure_default_project(tenant_id)
+       
+       
+    2: @router.get("")
+    9: def list_issues(
+    2:     current_user: dict = Depends(get_current_user),
+    2:     project_id: str | None = None,
+    2:     sprint_id: str | None = None,
+    2:     status: str | None = None,
+    2:     assignee_id: str | None = None,
+    2:     q: str | None = Query(default=None),
+       ):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     ensure_workspace_board_defaults(tenant_id)
+    1:     params: list[Any] = [tenant_id]
+    1:     where = ["i.tenant_id = %s"]
+    1:     if project_id:
+    1:         where.append("i.project_id = %s")
+    1:         params.append(project_id)
+    1:     if sprint_id == "null":
+               where.append("i.sprint_id IS NULL")
+    1:     elif sprint_id:
+               where.append("i.sprint_id = %s")
+               params.append(sprint_id)
+    1:     if status:
+    1:         validate_issue_values(status=status)
+    1:         where.append("i.status = %s")
+    1:         params.append(status)
+    1:     if assignee_id:
+    1:         where.append("i.assignee_id = %s")
+    1:         params.append(assignee_id)
+    1:     if q:
+    1:         where.append("(i.title ILIKE %s OR i.issue_key ILIKE %s OR i.description ILIKE %s)")
+    1:         params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+    2:     rows = fetch_all(
+    2:         f"""
+               SELECT i.id, i.tenant_id, i.project_id, i.sprint_id, i.issue_key, i.title, i.description, i.issue_type, i.status, i.priority,
+                      i.assignee_id, i.reporter_id, i.story_points, i.due_date, i.labels, i.position, i.created_at, i.updated_at,
+                      p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
+               FROM issues i
+               JOIN projects p ON p.id = i.project_id
+               LEFT JOIN users au ON au.id = i.assignee_id
+               LEFT JOIN users ru ON ru.id = i.reporter_id
+               LEFT JOIN sprints s ON s.id = i.sprint_id
+    1:         WHERE {' AND '.join(where)}
+               ORDER BY i.position ASC, i.created_at DESC
+               """,
+    1:         tuple(params),
+           )
+    1:     return {"issues": rows_to_json(rows)}
+       
+       
+    2: @router.post("")
+    3: async def create_issue(payload: IssueCreate, current_user: dict = Depends(get_current_user)):
+    2:     tenant_id = resolve_tenant_id(current_user)
+    2:     validate_issue_values(payload.issue_type, payload.status, payload.priority)
+    2:     ensure_workspace_board_defaults(tenant_id)
+    2:     project = ensure_project_for_task(tenant_id, payload.project_id)
+    2:     sprint_id = payload.sprint_id
+    2:     if sprint_id:
+               ensure_sprint(sprint_id, tenant_id, project["id"])
+    2:     elif payload.status != "BACKLOG":
+    1:         sprint = ensure_current_monthly_sprint(tenant_id, project["id"])
+    1:         sprint_id = sprint["id"]
+       
+    4:     with get_conn() as conn:
+    4:         with conn.cursor() as cur:
+    4:             cur.execute(
+    2:                 "UPDATE projects SET issue_counter = issue_counter + 1, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING issue_counter, key",
+    2:                 (project["id"], tenant_id),
+                   )
+    2:             counter_row = cur.fetchone()
+    2:             issue_key = f"{counter_row['key']}-{counter_row['issue_counter']}"
+    4:             cur.execute(
+    2:                 "SELECT COALESCE(MAX(position), 0) + 1000 AS next_position FROM issues WHERE tenant_id = %s AND project_id = %s AND status = %s",
+    2:                 (tenant_id, project["id"], payload.status),
+                   )
+    2:             position = cur.fetchone()["next_position"]
+    4:             cur.execute(
+    2:                 """
+                       INSERT INTO issues (
+                           tenant_id, project_id, sprint_id, issue_key, title, description, issue_type, status,
+                           priority, assignee_id, reporter_id, story_points, due_date, labels, position
+                       )
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING *
+                       """,
+    2:                 (
+    2:                     tenant_id,
+    2:                     project["id"],
+    2:                     sprint_id,
+    2:                     issue_key,
+    2:                     payload.title.strip(),
+    2:                     payload.description,
+    2:                     payload.issue_type,
+    2:                     payload.status,
+    2:                     payload.priority,
+    2:                     payload.assignee_id,
+    2:                     current_user["id"],
+    2:                     payload.story_points,
+    2:                     payload.due_date,
+    2:                     payload.labels,
+    2:                     position,
+                       ),
+                   )
+    2:             issue = cur.fetchone()
+       
+    2:     record_activity(tenant_id, current_user["id"], "issue_created", f"Created {issue['issue_key']}: {issue['title']}", project_id=project["id"], issue_id=issue["id"])
+    2:     await event_bus.publish(tenant_id, "issue_created", {"issue": row_to_json(issue)})
+    2:     return {"issue": row_to_json(issue)}
+       
+       
+    2: @router.post("/tasks")
+    3: async def create_task(payload: IssueCreate, current_user: dict = Depends(get_current_user)):
+           return await create_issue(payload, current_user)
+       
+       
+    2: @router.patch("/reorder")
+    3: async def reorder_issues(payload: ReorderRequest, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     updated_rows = []
+    2:     for item in payload.items:
+    1:         if item.status:
+    1:             validate_issue_values(status=item.status)
+    1:         existing = ensure_issue(item.id, tenant_id)
+    1:         status = item.status or existing["status"]
+    2:         updated = execute(
+    1:             "UPDATE issues SET status = %s, position = %s, sprint_id = %s, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
+    1:             (status, item.position, item.sprint_id if item.sprint_id is not None else existing["sprint_id"], item.id, tenant_id),
+               )
+    1:         updated_rows.append(updated)
+    1:     record_activity(tenant_id, current_user["id"], "issues_reordered", f"Reordered {len(updated_rows)} issues", metadata={"count": len(updated_rows)})
+    1:     await event_bus.publish(tenant_id, "issues_reordered", {"issues": rows_to_json(updated_rows)})
+    1:     return {"issues": rows_to_json(updated_rows)}
+       
+       
+    2: @router.get("/{issue_id}")
+    3: def get_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
+           tenant_id = resolve_tenant_id(current_user)
+           issue = fetch_one(
+               """
+               SELECT i.id, i.tenant_id, i.project_id, i.sprint_id, i.issue_key, i.title, i.description, i.issue_type, i.status, i.priority,
+                      i.assignee_id, i.reporter_id, i.story_points, i.due_date, i.labels, i.position, i.created_at, i.updated_at,
+                      p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
+               FROM issues i
+               JOIN projects p ON p.id = i.project_id
+               LEFT JOIN users au ON au.id = i.assignee_id
+               LEFT JOIN users ru ON ru.id = i.reporter_id
+               LEFT JOIN sprints s ON s.id = i.sprint_id
+               WHERE i.id = %s AND i.tenant_id = %s
+               """,
+               (issue_id, tenant_id),
+           )
+           if not issue:
+               raise HTTPException(status_code=404, detail="Issue not found")
+           return {"issue": row_to_json(issue)}
+       
+       
+    2: @router.patch("/{issue_id}")
+    3: async def update_issue(issue_id: str, payload: IssueUpdate, current_user: dict = Depends(get_current_user)):
+    2:     tenant_id = resolve_tenant_id(current_user)
+    2:     issue = ensure_issue(issue_id, tenant_id)
+    2:     validate_issue_values(payload.issue_type, payload.status, payload.priority)
+    2:     if payload.project_id is not None:
+    1:         ensure_project(payload.project_id, tenant_id)
+    2:     if payload.sprint_id is not None:
+               ensure_sprint(payload.sprint_id, tenant_id, issue["project_id"])
+       
+    2:     data = payload.model_dump(exclude_unset=True)
+    2:     if not data:
+               return {"issue": row_to_json(issue)}
+    2:     if payload.project_id is None or payload.project_id == issue["project_id"]:
+    1:         allowed = ["title", "description", "issue_type", "status", "priority", "sprint_id", "assignee_id", "story_points", "due_date", "labels", "position"]
+    1:         sets = []
+    1:         params = []
+   12:         for field in allowed:
+   11:             if field in data:
+    1:                 value = data[field]
+    1:                 if field == "title" and value is not None:
+                           value = value.strip()
+    1:                 sets.append(f"{field} = %s")
+    1:                 params.append(value)
+    1:         params.extend([issue_id, tenant_id])
+    2:         updated = execute(
+    1:             f"UPDATE issues SET {', '.join(sets)}, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
+    1:             tuple(params),
+               )
+           else:
+    1:         project = ensure_project(payload.project_id, tenant_id)
+    2:         with get_conn() as conn:
+    2:             with conn.cursor() as cur:
+    2:                 cur.execute(
+    1:                     "UPDATE projects SET issue_counter = issue_counter + 1, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING issue_counter, key",
+    1:                     (project["id"], tenant_id),
+                       )
+    1:                 counter_row = cur.fetchone()
+    1:                 new_issue_key = f"{counter_row['key']}-{counter_row['issue_counter']}"
+    1:                 sprint_id = payload.sprint_id
+    1:                 if sprint_id is not None:
+                           ensure_sprint(sprint_id, tenant_id, project["id"])
+    1:                 elif data.get("status", issue["status"]) != "BACKLOG":
+    1:                     sprint = ensure_current_monthly_sprint(tenant_id, project["id"])
+    1:                     sprint_id = sprint["id"]
+    1:                 sets = ["project_id = %s", "issue_key = %s"]
+    1:                 params = [project["id"], new_issue_key]
+    1:                 if "title" in data:
+                           sets.append("title = %s")
+                           params.append(data["title"].strip() if data["title"] is not None else None)
+   11:                 for field in ["description", "issue_type", "status", "priority", "sprint_id", "assignee_id", "story_points", "due_date", "labels", "position"]:
+   10:                     if field in data:
+                               value = data[field]
+                               if field == "sprint_id" and value is None:
+                                   value = None
+                               sets.append(f"{field} = %s")
+                               params.append(value)
+    1:                 if "sprint_id" not in data:
+    1:                     sets.append("sprint_id = %s")
+    1:                     params.append(sprint_id)
+    1:                 params.extend([issue_id, tenant_id])
+    2:                 cur.execute(
+    1:                     f"UPDATE issues SET {', '.join(sets)}, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
+    1:                     tuple(params),
+                       )
+    1:                 updated = cur.fetchone()
+    2:     record_activity(tenant_id, current_user["id"], "issue_updated", f"Updated {updated['issue_key']}", project_id=updated["project_id"], issue_id=issue_id, metadata=data)
+    2:     await event_bus.publish(tenant_id, "issue_updated", {"issue": row_to_json(updated), "changes": data})
+    2:     return {"issue": row_to_json(updated)}
+       
+       
+    2: @router.delete("/{issue_id}")
+    3: async def delete_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
+           tenant_id = resolve_tenant_id(current_user)
+           issue = execute("DELETE FROM issues WHERE id = %s AND tenant_id = %s RETURNING *", (issue_id, tenant_id))
+           if not issue:
+               raise HTTPException(status_code=404, detail="Issue not found")
+           record_activity(tenant_id, current_user["id"], "issue_deleted", f"Deleted {issue['issue_key']}", project_id=issue["project_id"], metadata={"issue_id": issue_id})
+           await event_bus.publish(tenant_id, "issue_deleted", {"issue_id": issue_id})
+           return {"ok": True}
+       
+       
+    2: @router.patch("/{issue_id}/status")
+    3: async def update_status(issue_id: str, payload: StatusUpdate, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     validate_issue_values(status=payload.status)
+    1:     issue = ensure_issue(issue_id, tenant_id)
+    1:     position = payload.position
+    1:     if position is None:
+    1:         row = fetch_one("SELECT COALESCE(MAX(position), 0) + 1000 AS next_position FROM issues WHERE tenant_id = %s AND project_id = %s AND status = %s", (tenant_id, issue["project_id"], payload.status))
+    1:         position = row["next_position"]
+    2:     updated = execute(
+    1:         "UPDATE issues SET status = %s, position = %s, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
+    1:         (payload.status, position, issue_id, tenant_id),
+           )
+    1:     record_activity(tenant_id, current_user["id"], "issue_status_changed", f"Moved {updated['issue_key']} to {payload.status}", project_id=updated["project_id"], issue_id=issue_id, metadata={"from": issue["status"], "to": payload.status})
+    1:     await event_bus.publish(tenant_id, "issue_updated", {"issue": row_to_json(updated), "changes": {"status": payload.status, "position": position}})
+    1:     return {"issue": row_to_json(updated)}
+       
+       
+    2: @router.patch("/{issue_id}/sprint")
+    3: async def update_sprint(issue_id: str, payload: SprintAssignment, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     issue = ensure_issue(issue_id, tenant_id)
+    1:     ensure_sprint(payload.sprint_id, tenant_id, issue["project_id"])
+    1:     status = payload.status or ("TODO" if payload.sprint_id and issue["status"] == "BACKLOG" else issue["status"])
+    1:     validate_issue_values(status=status)
+    2:     updated = execute(
+    1:         "UPDATE issues SET sprint_id = %s, status = %s, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
+    1:         (payload.sprint_id, status, issue_id, tenant_id),
+           )
+    1:     record_activity(tenant_id, current_user["id"], "issue_sprint_changed", f"Changed sprint for {updated['issue_key']}", project_id=updated["project_id"], issue_id=issue_id, sprint_id=payload.sprint_id)
+    1:     await event_bus.publish(tenant_id, "issue_updated", {"issue": row_to_json(updated), "changes": {"sprint_id": payload.sprint_id, "status": status}})
+    1:     return {"issue": row_to_json(updated)}

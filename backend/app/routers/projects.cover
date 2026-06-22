@@ -1,0 +1,133 @@
+    1: from fastapi import APIRouter, Depends, HTTPException
+    1: from pydantic import BaseModel, Field
+    1: from ..database import fetch_all, fetch_one, execute, get_conn
+    1: from ..security import get_current_user, require_role
+    1: from ..utils import row_to_json, rows_to_json, project_key
+    1: from ..services.activity import record_activity
+    1: from ..sse import event_bus
+       
+    1: router = APIRouter(prefix="/api/projects", tags=["projects"])
+       
+       
+   14: class ProjectCreate(BaseModel):
+    3:     name: str = Field(min_length=1, max_length=160)
+    3:     key: str | None = Field(default=None, max_length=20)
+    3:     description: str = ""
+    3:     visibility: str = Field(default="EVERYONE", pattern="^(EVERYONE|SOME_USERS|PRIVATE)$")
+       
+       
+   14: class ProjectUpdate(BaseModel):
+    3:     name: str | None = Field(default=None, max_length=160)
+    3:     description: str | None = None
+    3:     status: str | None = Field(default=None, pattern="^(ACTIVE|ARCHIVED)$")
+    3:     visibility: str | None = Field(default=None, pattern="^(EVERYONE|SOME_USERS|PRIVATE)$")
+       
+       
+    1: def resolve_tenant_id(current_user: dict) -> str:
+    1:     tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    1:     if not tenant_id:
+               raise HTTPException(status_code=400, detail="Workspace not selected")
+    1:     return str(tenant_id)
+       
+       
+    2: @router.get("")
+    3: def list_projects(current_user: dict = Depends(get_current_user), include_archived: bool = False):
+    2:     tenant_id = resolve_tenant_id(current_user)
+    2:     if include_archived:
+    1:         rows = fetch_all("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s ORDER BY created_at DESC", (tenant_id,))
+           else:
+    1:         rows = fetch_all("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s AND status != 'ARCHIVED' ORDER BY created_at DESC", (tenant_id,))
+    2:     return {"projects": rows_to_json(rows)}
+       
+       
+    2: @router.post("")
+    3: async def create_project(payload: ProjectCreate, current_user: dict = Depends(get_current_user)):
+    3:     tenant_id = resolve_tenant_id(current_user)
+    3:     key = project_key(payload.key or payload.name)
+    3:     try:
+    6:         with get_conn() as conn:
+    6:             with conn.cursor() as cur:
+    6:                 cur.execute(
+    3:                     """
+                           INSERT INTO projects (tenant_id, name, key, description, visibility, created_by)
+                           VALUES (%s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (tenant_id, key)
+                           DO NOTHING
+                           RETURNING *
+                           """,
+    3:                     (tenant_id, payload.name.strip(), key, payload.description, payload.visibility, current_user["id"]),
+                       )
+    3:                 project = cur.fetchone()
+    3:                 if not project:
+    2:                     cur.execute("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1", (tenant_id, key))
+    2:                     project = cur.fetchone()
+           except Exception as exc:
+               code = getattr(exc, "sqlstate", None)
+               if code == "23505":
+                   raise HTTPException(status_code=409, detail="Project key already exists in this tenant")
+               raise
+    3:     if not project:
+               raise HTTPException(status_code=500, detail="Project creation failed")
+    3:     record_activity(tenant_id, current_user["id"], "project_created", f"Created project {project['key']}", project_id=project["id"])
+    3:     await event_bus.publish(str(tenant_id), "project_created", {"project": row_to_json(project)})
+    3:     return {"project": row_to_json(project)}
+       
+       
+    2: @router.get("/{project_id}")
+    3: def get_project(project_id: str, current_user: dict = Depends(get_current_user)):
+           tenant_id = resolve_tenant_id(current_user)
+           project = fetch_one("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+           if not project:
+               raise HTTPException(status_code=404, detail="Project not found")
+           return {"project": row_to_json(project)}
+       
+       
+    2: @router.patch("/{project_id}")
+    3: async def update_project(project_id: str, payload: ProjectUpdate, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     project = fetch_one("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+    1:     if not project:
+               raise HTTPException(status_code=404, detail="Project not found")
+    1:     if current_user["role"] not in ("OWNER", "ADMIN") and project.get("created_by") != current_user["id"]:
+               raise HTTPException(status_code=403, detail="Insufficient permissions")
+    1:     name = payload.name.strip() if payload.name is not None else project["name"]
+    1:     description = payload.description if payload.description is not None else project["description"]
+    1:     status = payload.status if payload.status is not None else project["status"]
+    1:     visibility = payload.visibility if payload.visibility is not None else project.get("visibility", "EVERYONE")
+    2:     updated = execute(
+    1:         """
+               UPDATE projects SET name = %s, description = %s, status = %s, visibility = %s, updated_at = now()
+               WHERE id = %s AND tenant_id = %s
+               RETURNING *
+               """,
+    1:         (name, description, status, visibility, project_id, tenant_id),
+           )
+    1:     record_activity(tenant_id, current_user["id"], "project_updated", f"Updated project {updated['key']}", project_id=project_id)
+    1:     await event_bus.publish(str(tenant_id), "project_updated", {"project": row_to_json(updated)})
+    1:     return {"project": row_to_json(updated)}
+       
+       
+    2: @router.delete("/{project_id}")
+    3: async def archive_project(project_id: str, current_user: dict = Depends(get_current_user)):
+    2:     tenant_id = resolve_tenant_id(current_user)
+    2:     project = fetch_one("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s", (project_id, tenant_id))
+    2:     if not project:
+               raise HTTPException(status_code=404, detail="Project not found")
+    2:     if current_user["role"] not in ("OWNER", "ADMIN") and project.get("created_by") != current_user["id"]:
+    1:         raise HTTPException(status_code=403, detail="Insufficient permissions")
+    2:     updated = execute(
+    1:         """
+               UPDATE projects
+               SET status = 'ARCHIVED', updated_at = now()
+               WHERE id = %s
+                 AND tenant_id = %s
+                 AND (%s IN ('OWNER', 'ADMIN') OR created_by = %s)
+               RETURNING *
+               """,
+    1:         (project_id, tenant_id, current_user["role"], current_user["id"]),
+           )
+    1:     if not updated:
+               raise HTTPException(status_code=404, detail="Project not found")
+    1:     record_activity(tenant_id, current_user["id"], "project_archived", f"Archived project {updated['key']}", project_id=project_id)
+    1:     await event_bus.publish(str(tenant_id), "project_archived", {"project_id": project_id})
+    1:     return {"ok": True}

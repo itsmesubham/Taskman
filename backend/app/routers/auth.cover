@@ -1,0 +1,86 @@
+    1: from fastapi import APIRouter, Depends, HTTPException, status
+    1: from pydantic import BaseModel, EmailStr, Field
+    1: from ..database import fetch_one, get_conn
+    1: from ..security import create_token, get_current_user, hash_password, normalize_email, verify_password
+    1: from ..services.memberships import active_membership_for_user, memberships_for_user
+    1: from ..utils import row_to_json, rows_to_json
+       
+    1: router = APIRouter(prefix="/api/auth", tags=["auth"])
+       
+       
+   12: class SignupRequest(BaseModel):
+    3:     name: str = Field(min_length=1, max_length=120)
+    2:     email: EmailStr
+    3:     password: str = Field(min_length=6, max_length=128)
+       
+       
+    9: class LoginRequest(BaseModel):
+    2:     email: EmailStr
+    2:     password: str
+       
+       
+    1: def _user_payload(user: dict, memberships: list[dict] | None = None):
+    3:     memberships = memberships or []
+    3:     active_membership = active_membership_for_user(str(user["id"]), user.get("active_tenant_id"), memberships) if memberships else None
+    6:     return row_to_json({
+    3:         "id": user["id"],
+    3:         "name": user["name"],
+    3:         "email": user["email"],
+    3:         "active_tenant_id": user.get("active_tenant_id"),
+    3:         "role": active_membership.get("role") if active_membership else user.get("role"),
+    3:         "tenant_name": active_membership.get("tenant_name") if active_membership else user.get("tenant_name"),
+    3:         "tenant_slug": active_membership.get("tenant_slug") if active_membership else user.get("tenant_slug"),
+           })
+       
+       
+    2: @router.post("/signup")
+    3: def signup(payload: SignupRequest):
+    2:     email = normalize_email(payload.email)
+    4:     with get_conn() as conn:
+    4:         with conn.cursor() as cur:
+    2:             cur.execute("SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s", (email,))
+    2:             user = cur.fetchone()
+    2:             if user:
+    1:                 if not verify_password(payload.password, user["password_hash"]):
+    1:                     raise HTTPException(status_code=409, detail="Email already exists with a different password")
+                   else:
+    2:                 cur.execute(
+    1:                     "INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s) RETURNING *",
+    1:                     (payload.name.strip(), email, hash_password(payload.password)),
+                       )
+    1:                 user = cur.fetchone()
+       
+    1:     memberships = rows_to_json(memberships_for_user(str(user["id"])))
+    1:     return {
+    1:         "access_token": create_token(str(user["id"])),
+    1:         "token_type": "bearer",
+    1:         "user": _user_payload(user, memberships),
+    1:         "memberships": memberships,
+           }
+       
+       
+    2: @router.post("/login")
+    3: def login(payload: LoginRequest):
+    1:     email = normalize_email(payload.email)
+    2:     row = fetch_one(
+    1:         "SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s",
+    1:         (email,),
+           )
+    1:     if not row or not verify_password(payload.password, row["password_hash"]):
+               raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    1:     memberships = rows_to_json(memberships_for_user(str(row["id"])))
+    1:     return {
+    1:         "access_token": create_token(str(row["id"])),
+    1:         "token_type": "bearer",
+    1:         "user": _user_payload(row, memberships),
+    1:         "memberships": memberships,
+           }
+       
+       
+    2: @router.get("/me")
+    3: def me(current_user: dict = Depends(get_current_user)):
+    1:     memberships = rows_to_json(memberships_for_user(str(current_user["id"])))
+    1:     return {
+    1:         "user": _user_payload(current_user, memberships),
+    1:         "memberships": memberships,
+           }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { initials } from '../utils.js';
 
@@ -6,6 +6,12 @@ export default function WorkspacePicker() {
   const { memberships, setActiveTenant } = useWorkspace();
   const [selected, setSelected] = useState(memberships[0]?.tenant_id || '');
   const current = useMemo(() => memberships.find((membership) => membership.tenant_id === selected) || memberships[0] || null, [memberships, selected]);
+
+  useEffect(() => {
+    if (!selected && memberships[0]?.tenant_id) {
+      setSelected(memberships[0].tenant_id);
+    }
+  }, [memberships, selected]);
 
   const submit = async (event) => {
     event.preventDefault();

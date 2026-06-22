@@ -1,0 +1,246 @@
+    1: import logging
+       
+    1: from fastapi import APIRouter, Depends, HTTPException
+    1: from pydantic import BaseModel, EmailStr, Field
+    1: from ..database import fetch_all, fetch_one, execute, get_conn
+    1: from ..security import create_token, get_current_user, require_role, normalize_email
+    1: from ..services.memberships import memberships_for_user
+    1: from ..services.workspace_defaults import ensure_workspace_invite, invite_url_for_tenant
+    1: from ..services.activity import record_activity
+    1: from ..sse import event_bus
+    1: from ..utils import row_to_json, rows_to_json, slugify
+       
+    1: router = APIRouter(prefix="/api/tenants", tags=["tenants"])
+    1: logger = logging.getLogger(__name__)
+       
+       
+   10: class TenantCreate(BaseModel):
+    3:     name: str = Field(min_length=1, max_length=120)
+    3:     slug: str | None = Field(default=None, max_length=80)
+       
+       
+   10: class MemberInvite(BaseModel):
+    2:     email: EmailStr
+    3:     role: str = Field(default="MEMBER", pattern="^(OWNER|ADMIN|MEMBER|VIEWER)$")
+       
+       
+    1: def _tenant_memberships(user_id: str):
+    2:     return rows_to_json(memberships_for_user(user_id))
+       
+       
+    1: def resolve_tenant_id(current_user: dict) -> str:
+    1:     tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    1:     if not tenant_id:
+               raise HTTPException(status_code=400, detail="Workspace not selected")
+    1:     return str(tenant_id)
+       
+       
+    2: @router.get("")
+    3: def list_tenants(search: str | None = None):
+           if search:
+               rows = fetch_all(
+                   "SELECT id, name, slug, created_at FROM tenants WHERE name ILIKE %s OR slug ILIKE %s ORDER BY name LIMIT 50",
+                   (f"%{search}%", f"%{search}%"),
+               )
+           else:
+               rows = fetch_all("SELECT id, name, slug, created_at FROM tenants ORDER BY created_at DESC LIMIT 50")
+           return {"tenants": rows_to_json(rows)}
+       
+       
+    2: @router.get("/my")
+    3: def my_tenants(current_user: dict = Depends(get_current_user)):
+    2:     return {
+    2:         "tenants": _tenant_memberships(str(current_user["id"])),
+    2:         "active_tenant_id": current_user.get("active_tenant_id"),
+           }
+       
+       
+    2: @router.post("")
+    3: def create_tenant(payload: TenantCreate, current_user: dict = Depends(get_current_user)):
+    3:     base_slug = slugify(payload.slug or payload.name)
+    3:     slug = base_slug
+    3:     suffix = 1
+    3:     while fetch_one("SELECT id FROM tenants WHERE slug = %s", (slug,)):
+               suffix += 1
+               slug = f"{base_slug}-{suffix}"
+    3:     try:
+    6:         with get_conn() as conn:
+    6:             with conn.cursor() as cur:
+    6:                 cur.execute(
+    3:                     "INSERT INTO tenants (name, slug, invite_enabled, invite_created_at) VALUES (%s, %s, true, now()) RETURNING *",
+    3:                     (payload.name.strip(), slug),
+                       )
+    2:                 tenant = cur.fetchone()
+    2:                 if not tenant:
+                           raise HTTPException(status_code=500, detail="Workspace creation failed")
+       
+    4:                 cur.execute(
+    2:                     """
+                           INSERT INTO tenant_members (tenant_id, user_id, role, status)
+                           VALUES (%s, %s, 'OWNER', 'ACTIVE')
+                           ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status
+                           RETURNING *
+                           """,
+    2:                     (tenant["id"], current_user["id"]),
+                       )
+    2:                 membership = cur.fetchone()
+    2:                 if not membership:
+                           raise HTTPException(status_code=500, detail="Workspace membership creation failed")
+       
+    4:                 cur.execute(
+    2:                     "UPDATE users SET active_tenant_id = %s, updated_at = now() WHERE id = %s",
+    2:                     (tenant["id"], current_user["id"]),
+                       )
+    1:     except HTTPException:
+               raise
+    1:     except Exception as exc:
+    1:         code = getattr(exc, "sqlstate", None)
+    1:         if code == "23505":
+    1:             logger.warning("Workspace creation conflict for slug %s", slug)
+    1:             raise HTTPException(status_code=409, detail="Workspace already exists")
+               logger.exception("Workspace creation failed")
+               raise HTTPException(status_code=500, detail="Workspace creation failed") from exc
+       
+    2:     tenant = ensure_workspace_invite(str(tenant["id"])) or tenant
+    2:     token = create_token(str(current_user["id"]), str(tenant["id"]), "OWNER")
+    2:     return {
+    4:         "tenant": row_to_json({
+    2:             "id": tenant["id"],
+    2:             "name": tenant["name"],
+    2:             "slug": tenant["slug"],
+    2:             "invite_code": tenant.get("invite_code"),
+    2:             "invite_enabled": tenant.get("invite_enabled", True),
+               }),
+    2:         "membership": row_to_json(membership),
+    2:         "access_token": token,
+    2:         "invite_url": invite_url_for_tenant(tenant),
+           }
+       
+       
+    2: @router.get("/current")
+    3: def current_tenant(current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    1:     if not tenant_id:
+               raise HTTPException(status_code=404, detail="No active workspace")
+    1:     tenant = fetch_one("SELECT id, name, slug, invite_code, invite_enabled, invite_created_at, invite_regenerated_at FROM tenants WHERE id = %s", (tenant_id,))
+    1:     return {"tenant": row_to_json(tenant)}
+       
+       
+    2: @router.get("/{tenant_id}/members")
+    3: def members(tenant_id: str, current_user: dict = Depends(get_current_user)):
+    1:     if resolve_tenant_id(current_user) != tenant_id:
+               raise HTTPException(status_code=403, detail="Cannot access another tenant")
+    2:     rows = fetch_all(
+    1:         """
+               SELECT u.id, u.name, u.email, tm.role, tm.status, tm.joined_at
+               FROM tenant_members tm
+               JOIN users u ON u.id = tm.user_id
+               WHERE tm.tenant_id = %s
+               ORDER BY tm.joined_at ASC
+               """,
+    1:         (tenant_id,),
+           )
+    1:     return {"members": rows_to_json(rows)}
+       
+       
+    2: @router.get("/{tenant_id}/invite-link")
+    3: def get_invite_link(tenant_id: str, current_user: dict = Depends(require_role("OWNER", "ADMIN"))):
+    1:     if resolve_tenant_id(current_user) != tenant_id:
+               raise HTTPException(status_code=403, detail="Cannot access another tenant")
+    1:     tenant = ensure_workspace_invite(tenant_id)
+    1:     if not tenant:
+               raise HTTPException(status_code=404, detail="Workspace not found")
+    1:     return {
+    1:         "tenant": row_to_json(tenant),
+    1:         "invite_url": invite_url_for_tenant(tenant),
+           }
+       
+       
+    2: @router.post("/{tenant_id}/invite-link/regenerate")
+    3: def regenerate_invite_link(tenant_id: str, current_user: dict = Depends(require_role("OWNER", "ADMIN"))):
+    1:     if resolve_tenant_id(current_user) != tenant_id:
+               raise HTTPException(status_code=403, detail="Cannot access another tenant")
+    1:     tenant = ensure_workspace_invite(tenant_id, force_new=True)
+    1:     if not tenant:
+               raise HTTPException(status_code=404, detail="Workspace not found")
+    1:     return {
+    1:         "tenant": row_to_json(tenant),
+    1:         "invite_url": invite_url_for_tenant(tenant),
+           }
+       
+       
+    2: @router.post("/{tenant_id}/invite-link/revoke")
+    3: def revoke_invite_link(tenant_id: str, current_user: dict = Depends(require_role("OWNER", "ADMIN"))):
+    1:     if resolve_tenant_id(current_user) != tenant_id:
+               raise HTTPException(status_code=403, detail="Cannot access another tenant")
+    2:     tenant = execute(
+    1:         "UPDATE tenants SET invite_enabled = false, updated_at = now() WHERE id = %s RETURNING *",
+    1:         (tenant_id,),
+           )
+    1:     if not tenant:
+               raise HTTPException(status_code=404, detail="Workspace not found")
+    1:     return {"tenant": row_to_json(tenant), "invite_url": invite_url_for_tenant(tenant)}
+       
+       
+    2: @router.post("/{tenant_id}/members")
+    6: async def add_member(
+    1:     tenant_id: str,
+    1:     payload: MemberInvite,
+    2:     current_user: dict = Depends(require_role("OWNER", "ADMIN")),
+       ):
+           if resolve_tenant_id(current_user) != tenant_id:
+               raise HTTPException(status_code=403, detail="Cannot access another tenant")
+           user = fetch_one("SELECT id, name, email FROM users WHERE email = %s", (normalize_email(payload.email),))
+           if not user:
+               raise HTTPException(status_code=404, detail="User must sign up once before being added to a tenant")
+           membership = execute(
+               """
+               INSERT INTO tenant_members (tenant_id, user_id, role, status)
+               VALUES (%s, %s, %s, 'ACTIVE')
+               ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status
+               RETURNING *
+               """,
+               (tenant_id, user["id"], payload.role),
+           )
+           record_activity(tenant_id, current_user["id"], "member_added", f"Added {user['email']} as {payload.role}")
+           await event_bus.publish(tenant_id, "member_added", {"user_id": user["id"], "email": user["email"], "role": payload.role})
+           return {"member": row_to_json({**user, "role": membership["role"], "joined_at": membership["joined_at"]})}
+       
+       
+    2: @router.delete("/{tenant_id}/members/{user_id}")
+    6: async def remove_member(
+    1:     tenant_id: str,
+    1:     user_id: str,
+    2:     current_user: dict = Depends(require_role("OWNER", "ADMIN")),
+       ):
+    2:     if resolve_tenant_id(current_user) != tenant_id:
+               raise HTTPException(status_code=403, detail="Cannot access another tenant")
+    2:     if current_user["id"] == user_id:
+    1:         raise HTTPException(status_code=400, detail="Use leave workspace instead")
+    2:     target = fetch_one(
+    1:         "SELECT tm.role, u.name, u.email FROM tenant_members tm JOIN users u ON u.id = tm.user_id WHERE tm.tenant_id = %s AND tm.user_id = %s",
+    1:         (tenant_id, user_id),
+           )
+    1:     if not target:
+               raise HTTPException(status_code=404, detail="Workspace member not found")
+    1:     target_role = str(target["role"]).upper()
+    1:     current_role = str(current_user.get("role") or "").upper()
+    1:     if target_role == "OWNER" and current_role != "OWNER":
+               raise HTTPException(status_code=403, detail="Only an owner can remove another owner")
+    2:     removed = execute(
+    1:         "DELETE FROM tenant_members WHERE tenant_id = %s AND user_id = %s RETURNING *",
+    1:         (tenant_id, user_id),
+           )
+    1:     if not removed:
+               raise HTTPException(status_code=404, detail="Workspace member not found")
+    2:     execute(
+    1:         """
+               UPDATE users
+               SET active_tenant_id = NULL, updated_at = now()
+               WHERE id = %s AND active_tenant_id = %s
+               """,
+    1:         (user_id, tenant_id),
+           )
+    1:     record_activity(tenant_id, current_user["id"], "member_removed", f"Removed {target['email']}")
+    1:     await event_bus.publish(tenant_id, "member_removed", {"user_id": user_id, "email": target["email"]})
+    1:     return {"ok": True}

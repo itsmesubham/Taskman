@@ -1,0 +1,61 @@
+    1: from contextlib import contextmanager
+    1: from psycopg.rows import dict_row
+    1: from psycopg_pool import ConnectionPool
+    1: from .config import get_settings
+       
+    1: pool: ConnectionPool | None = None
+       
+       
+    1: def init_pool() -> None:
+           global pool
+    1:     if pool is None:
+    2:         pool = ConnectionPool(
+    1:             conninfo=get_settings().database_url,
+    1:             min_size=1,
+    1:             max_size=10,
+    1:             kwargs={"row_factory": dict_row, "autocommit": False},
+               )
+       
+       
+    1: def close_pool() -> None:
+           global pool
+    1:     if pool is not None:
+    1:         pool.close()
+    1:         pool = None
+       
+       
+    2: @contextmanager
+    2: def get_conn():
+    4:     if pool is None:
+               init_pool()
+    4:     assert pool is not None
+    8:     with pool.connection() as conn:
+    4:         try:
+    4:             yield conn
+    4:             conn.commit()
+               except Exception:
+                   conn.rollback()
+                   raise
+       
+       
+    1: def fetch_one(query: str, params: tuple = ()):
+    2:     with get_conn() as conn:
+    2:         with conn.cursor() as cur:
+    1:             cur.execute(query, params)
+    1:             return cur.fetchone()
+       
+       
+    1: def fetch_all(query: str, params: tuple = ()):
+    2:     with get_conn() as conn:
+    2:         with conn.cursor() as cur:
+    1:             cur.execute(query, params)
+    1:             return cur.fetchall()
+       
+       
+    1: def execute(query: str, params: tuple = ()):
+    4:     with get_conn() as conn:
+    4:         with conn.cursor() as cur:
+    2:             cur.execute(query, params)
+    2:             if cur.description:
+    1:                 return cur.fetchone()
+    1:             return None

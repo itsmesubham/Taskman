@@ -1,0 +1,222 @@
+    1: from fastapi import APIRouter, Depends, HTTPException
+    1: from pydantic import BaseModel, Field
+    1: from ..database import fetch_all, fetch_one, execute, get_conn
+    1: from ..security import get_current_user, require_role
+    1: from ..utils import row_to_json, rows_to_json
+    1: from ..services.activity import record_activity
+    1: from ..services.workspace_defaults import ensure_workspace_board_defaults, get_workspace_sprint_schedule
+    1: from ..sse import event_bus
+       
+    1: router = APIRouter(prefix="/api/sprints", tags=["sprints"])
+       
+    1: VALID_STATUS = {"PLANNED", "ACTIVE", "COMPLETED"}
+       
+       
+   16: class SprintCreate(BaseModel):
+    2:     project_id: str
+    3:     name: str = Field(min_length=1, max_length=160)
+    3:     goal: str = ""
+    3:     start_date: str | None = None
+    3:     end_date: str | None = None
+       
+       
+   16: class SprintUpdate(BaseModel):
+    3:     name: str | None = Field(default=None, max_length=160)
+    3:     goal: str | None = None
+    3:     status: str | None = None
+    3:     start_date: str | None = None
+    3:     end_date: str | None = None
+       
+       
+    7: class SprintIssueRequest(BaseModel):
+    2:     issue_ids: list[str]
+       
+       
+    8: class CompleteSprintRequest(BaseModel):
+    3:     incomplete_strategy: str = Field(default="BACKLOG", pattern="^(BACKLOG|KEEP)$")
+       
+       
+    1: def resolve_tenant_id(current_user: dict) -> str:
+    1:     tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
+    1:     if not tenant_id:
+               raise HTTPException(status_code=400, detail="Workspace not selected")
+    1:     return str(tenant_id)
+       
+       
+    1: def ensure_project(project_id: str, tenant_id: str):
+           project = fetch_one(
+               "SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s",
+               (project_id, tenant_id),
+           )
+           if not project:
+               raise HTTPException(status_code=404, detail="Project not found")
+           return project
+       
+       
+    1: def ensure_sprint(sprint_id: str, tenant_id: str):
+   10:     sprint = fetch_one(
+    5:         "SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at FROM sprints WHERE id = %s AND tenant_id = %s",
+    5:         (sprint_id, tenant_id),
+           )
+    5:     if not sprint:
+               raise HTTPException(status_code=404, detail="Sprint not found")
+    5:     return sprint
+       
+       
+    2: @router.get("")
+    3: def list_sprints(current_user: dict = Depends(get_current_user), project_id: str | None = None, status: str | None = None):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     params = [tenant_id]
+    1:     where = ["s.tenant_id = %s"]
+    1:     if project_id:
+               where.append("s.project_id = %s")
+               params.append(project_id)
+    1:     if status:
+               if status not in VALID_STATUS:
+                   raise HTTPException(status_code=400, detail="Invalid sprint status")
+               where.append("s.status = %s")
+               params.append(status)
+    2:     rows = fetch_all(
+    2:         f"""
+               SELECT s.id, s.tenant_id, s.project_id, s.name, s.goal, s.status, s.start_date, s.end_date, s.created_by, s.issue_count, s.created_at, s.updated_at,
+                      p.key AS project_key, p.name AS project_name,
+                      COUNT(i.id) AS issue_count,
+                      COUNT(i.id) FILTER (WHERE i.status = 'DONE') AS done_count,
+                      COALESCE(SUM(i.story_points), 0) AS total_points,
+                      COALESCE(SUM(i.story_points) FILTER (WHERE i.status = 'DONE'), 0) AS done_points
+               FROM sprints s
+               JOIN projects p ON p.id = s.project_id
+               LEFT JOIN issues i ON i.sprint_id = s.id
+    1:         WHERE {' AND '.join(where)}
+               GROUP BY s.id, p.key, p.name
+               ORDER BY s.created_at DESC
+               """,
+    1:         tuple(params),
+           )
+    1:     return {"sprints": rows_to_json(rows)}
+       
+       
+    2: @router.get("/schedule")
+    3: def sprint_schedule(current_user: dict = Depends(get_current_user), project_id: str | None = None):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     ensure_workspace_board_defaults(tenant_id)
+    1:     return get_workspace_sprint_schedule(tenant_id, project_id)
+       
+       
+    2: @router.post("")
+    3: async def create_sprint(payload: SprintCreate, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     ensure_project(payload.project_id, tenant_id)
+    2:     sprint = execute(
+    1:         """
+               INSERT INTO sprints (tenant_id, project_id, name, goal, start_date, end_date, created_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               RETURNING *
+               """,
+    1:         (tenant_id, payload.project_id, payload.name.strip(), payload.goal, payload.start_date, payload.end_date, current_user["id"]),
+           )
+    1:     record_activity(tenant_id, current_user["id"], "sprint_created", f"Created sprint {sprint['name']}", project_id=payload.project_id, sprint_id=sprint["id"])
+    1:     await event_bus.publish(tenant_id, "sprint_created", {"sprint": row_to_json(sprint)})
+    1:     return {"sprint": row_to_json(sprint)}
+       
+       
+    2: @router.get("/{sprint_id}")
+    3: def get_sprint(sprint_id: str, current_user: dict = Depends(get_current_user)):
+           tenant_id = resolve_tenant_id(current_user)
+           sprint = ensure_sprint(sprint_id, tenant_id)
+           issues = fetch_all(
+               "SELECT id, tenant_id, project_id, sprint_id, issue_key, title, description, issue_type, status, priority, assignee_id, reporter_id, story_points, due_date, labels, position, created_at, updated_at FROM issues WHERE sprint_id = %s AND tenant_id = %s ORDER BY position ASC",
+               (sprint_id, tenant_id),
+           )
+           return {"sprint": row_to_json(sprint), "issues": rows_to_json(issues)}
+       
+       
+    2: @router.patch("/{sprint_id}")
+    3: async def update_sprint(sprint_id: str, payload: SprintUpdate, current_user: dict = Depends(get_current_user)):
+           tenant_id = resolve_tenant_id(current_user)
+           sprint = ensure_sprint(sprint_id, tenant_id)
+           data = payload.model_dump(exclude_unset=True)
+           if payload.status and payload.status not in VALID_STATUS:
+               raise HTTPException(status_code=400, detail="Invalid sprint status")
+           if not data:
+               return {"sprint": row_to_json(sprint)}
+           sets = []
+           params = []
+           for field in ["name", "goal", "status", "start_date", "end_date"]:
+               if field in data:
+                   value = data[field]
+                   if field == "name" and value is not None:
+                       value = value.strip()
+                   sets.append(f"{field} = %s")
+                   params.append(value)
+           params.extend([sprint_id, tenant_id])
+           updated = execute(
+               f"UPDATE sprints SET {', '.join(sets)}, updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *",
+               tuple(params),
+           )
+           record_activity(tenant_id, current_user["id"], "sprint_updated", f"Updated sprint {updated['name']}", project_id=updated["project_id"], sprint_id=sprint_id, metadata=data)
+           await event_bus.publish(tenant_id, "sprint_updated", {"sprint": row_to_json(updated), "changes": data})
+           return {"sprint": row_to_json(updated)}
+       
+       
+    2: @router.post("/{sprint_id}/start")
+    3: async def start_sprint(sprint_id: str, current_user: dict = Depends(require_role("OWNER", "ADMIN", "MEMBER"))):
+    2:     tenant_id = resolve_tenant_id(current_user)
+    2:     sprint = ensure_sprint(sprint_id, tenant_id)
+    2:     active = fetch_one("SELECT id FROM sprints WHERE tenant_id = %s AND project_id = %s AND status = 'ACTIVE' AND id != %s", (tenant_id, sprint["project_id"], sprint_id))
+    2:     if active:
+    1:         raise HTTPException(status_code=409, detail="Another sprint is already active for this project")
+    1:     updated = execute("UPDATE sprints SET status = 'ACTIVE', updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *", (sprint_id, tenant_id))
+    1:     execute("UPDATE issues SET status = 'TODO', updated_at = now() WHERE sprint_id = %s AND tenant_id = %s AND status = 'BACKLOG'", (sprint_id, tenant_id))
+    1:     record_activity(tenant_id, current_user["id"], "sprint_started", f"Started sprint {updated['name']}", project_id=updated["project_id"], sprint_id=sprint_id)
+    1:     await event_bus.publish(tenant_id, "sprint_started", {"sprint": row_to_json(updated)})
+    1:     return {"sprint": row_to_json(updated)}
+       
+       
+    2: @router.post("/{sprint_id}/complete")
+    3: async def complete_sprint(sprint_id: str, payload: CompleteSprintRequest = CompleteSprintRequest(), current_user: dict = Depends(require_role("OWNER", "ADMIN"))):
+    2:     tenant_id = resolve_tenant_id(current_user)
+    2:     sprint = ensure_sprint(sprint_id, tenant_id)
+    4:     with get_conn() as conn:
+    4:         with conn.cursor() as cur:
+    2:             cur.execute("UPDATE sprints SET status = 'COMPLETED', updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *", (sprint_id, tenant_id))
+    2:             updated = cur.fetchone()
+    2:             moved_count = 0
+    2:             if payload.incomplete_strategy == "BACKLOG":
+    4:                 cur.execute(
+    2:                     """
+                           UPDATE issues
+                           SET sprint_id = NULL, status = 'BACKLOG', updated_at = now()
+                           WHERE sprint_id = %s AND tenant_id = %s AND status != 'DONE'
+                           RETURNING id
+                           """,
+    2:                     (sprint_id, tenant_id),
+                       )
+    2:                 moved_count = len(cur.fetchall())
+    2:     record_activity(tenant_id, current_user["id"], "sprint_completed", f"Completed sprint {updated['name']}", project_id=updated["project_id"], sprint_id=sprint_id, metadata={"moved_incomplete_to_backlog": moved_count})
+    2:     await event_bus.publish(tenant_id, "sprint_completed", {"sprint": row_to_json(updated), "moved_incomplete_to_backlog": moved_count})
+    2:     return {"sprint": row_to_json(updated), "moved_incomplete_to_backlog": moved_count}
+       
+       
+    2: @router.post("/{sprint_id}/issues")
+    3: async def add_issues_to_sprint(sprint_id: str, payload: SprintIssueRequest, current_user: dict = Depends(get_current_user)):
+    1:     tenant_id = resolve_tenant_id(current_user)
+    1:     sprint = ensure_sprint(sprint_id, tenant_id)
+    1:     updated_rows = []
+    2:     for issue_id in payload.issue_ids:
+    2:         updated = execute(
+    1:             """
+                   UPDATE issues
+                   SET sprint_id = %s,
+                       status = CASE WHEN status = 'BACKLOG' THEN 'TODO' ELSE status END,
+                       updated_at = now()
+                   WHERE id = %s AND tenant_id = %s AND project_id = %s
+                   RETURNING *
+                   """,
+    1:             (sprint_id, issue_id, tenant_id, sprint["project_id"]),
+               )
+    1:         if updated:
+    1:             updated_rows.append(updated)
+    1:     record_activity(tenant_id, current_user["id"], "issues_added_to_sprint", f"Added {len(updated_rows)} issues to sprint {sprint['name']}", project_id=sprint["project_id"], sprint_id=sprint_id, metadata={"count": len(updated_rows)})
+    1:     await event_bus.publish(tenant_id, "issues_added_to_sprint", {"sprint_id": sprint_id, "issues": rows_to_json(updated_rows)})
+    1:     return {"issues": rows_to_json(updated_rows)}
