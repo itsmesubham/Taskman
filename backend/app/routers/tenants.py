@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from ..database import fetch_all, fetch_one, execute, get_conn
@@ -8,6 +10,7 @@ from ..sse import event_bus
 from ..utils import row_to_json, rows_to_json, slugify
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
+logger = logging.getLogger(__name__)
 
 
 class TenantCreate(BaseModel):
@@ -63,30 +66,54 @@ def create_tenant(payload: TenantCreate, current_user: dict = Depends(get_curren
     while fetch_one("SELECT id FROM tenants WHERE slug = %s", (slug,)):
         suffix += 1
         slug = f"{base_slug}-{suffix}"
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO tenants (name, slug, invite_enabled, invite_created_at) VALUES (%s, %s, true, now()) RETURNING *",
-                (payload.name.strip(), slug),
-            )
-            tenant = cur.fetchone()
-            membership = execute(
-                """
-                INSERT INTO tenant_members (tenant_id, user_id, role, status)
-                VALUES (%s, %s, 'OWNER', 'ACTIVE')
-                ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status
-                RETURNING *
-                """,
-                (tenant["id"], current_user["id"]),
-            )
-            cur.execute(
-                "UPDATE users SET active_tenant_id = %s, updated_at = now() WHERE id = %s",
-                (tenant["id"], current_user["id"]),
-            )
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO tenants (name, slug, invite_enabled, invite_created_at) VALUES (%s, %s, true, now()) RETURNING *",
+                    (payload.name.strip(), slug),
+                )
+                tenant = cur.fetchone()
+                if not tenant:
+                    raise HTTPException(status_code=500, detail="Workspace creation failed")
+
+                cur.execute(
+                    """
+                    INSERT INTO tenant_members (tenant_id, user_id, role, status)
+                    VALUES (%s, %s, 'OWNER', 'ACTIVE')
+                    ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status
+                    RETURNING *
+                    """,
+                    (tenant["id"], current_user["id"]),
+                )
+                membership = cur.fetchone()
+                if not membership:
+                    raise HTTPException(status_code=500, detail="Workspace membership creation failed")
+
+                cur.execute(
+                    "UPDATE users SET active_tenant_id = %s, updated_at = now() WHERE id = %s",
+                    (tenant["id"], current_user["id"]),
+                )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        code = getattr(exc, "sqlstate", None)
+        if code == "23505":
+            logger.warning("Workspace creation conflict for slug %s", slug)
+            raise HTTPException(status_code=409, detail="Workspace already exists")
+        logger.exception("Workspace creation failed")
+        raise HTTPException(status_code=500, detail="Workspace creation failed") from exc
+
     tenant = ensure_workspace_invite(str(tenant["id"])) or tenant
     token = create_token(str(current_user["id"]), str(tenant["id"]), "OWNER")
     return {
-        "tenant": row_to_json(tenant),
+        "tenant": row_to_json({
+            "id": tenant["id"],
+            "name": tenant["name"],
+            "slug": tenant["slug"],
+            "invite_code": tenant.get("invite_code"),
+            "invite_enabled": tenant.get("invite_enabled", True),
+        }),
         "membership": row_to_json(membership),
         "access_token": token,
         "invite_url": invite_url_for_tenant(tenant),
