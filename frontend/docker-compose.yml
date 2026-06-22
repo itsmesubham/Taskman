@@ -1,9 +1,9 @@
 services:
-  ui:
+  taskman-ui:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: taskman-react-ui
+    container_name: taskman-ui
     ports:
       - "3000:80"
     restart: unless-stopped
