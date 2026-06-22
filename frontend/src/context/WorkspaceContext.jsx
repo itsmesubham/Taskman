@@ -31,6 +31,7 @@ export function WorkspaceProvider({ children }) {
   const [dashboard, setDashboard] = useState(null);
   const [sprintSchedule, setSprintSchedule] = useState(null);
   const [activeProjectId, setActiveProjectIdState] = useState(() => localStorage.getItem('taskman_active_project') || '');
+  const activeProjectIdRef = useRef(activeProjectId);
   const [boardSprintId, setBoardSprintId] = useState('active');
   const [query, setQuery] = useState('');
   const [selectedIssue, setSelectedIssue] = useState(null);
@@ -51,6 +52,7 @@ export function WorkspaceProvider({ children }) {
   const [bootstrapReady, setBootstrapReady] = useState(!session.token);
   const refreshTimer = useRef(null);
   const bootstrappingRef = useRef(false);
+  const workspaceLoadRef = useRef(false);
 
   const updateSession = useCallback((next) => {
     setSession(next);
@@ -115,8 +117,13 @@ export function WorkspaceProvider({ children }) {
 
   const setActiveProjectId = useCallback((id) => {
     setActiveProjectIdState(id);
+    activeProjectIdRef.current = id;
     localStorage.setItem('taskman_active_project', id || '');
   }, []);
+
+  useEffect(() => {
+    activeProjectIdRef.current = activeProjectId;
+  }, [activeProjectId]);
 
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path);
@@ -206,6 +213,8 @@ export function WorkspaceProvider({ children }) {
       showError(new Error('Backend API URL must use HTTPS unless it is localhost.'));
       return;
     }
+    if (workspaceLoadRef.current) return;
+    workspaceLoadRef.current = true;
     if (!silent) setLoading(true);
     try {
       const [defaultsRes, scheduleRes, projectRes, sprintRes, issueRes, reportRes] = await Promise.all([
@@ -225,7 +234,7 @@ export function WorkspaceProvider({ children }) {
       setIssues(issueRes.issues || []);
       setDashboard(reportRes || null);
 
-      if (!activeProjectId || !nextProjects.some((project) => project.id === activeProjectId)) {
+      if (!activeProjectIdRef.current || !nextProjects.some((project) => project.id === activeProjectIdRef.current)) {
         setActiveProjectId(nextProjects[0]?.id || '');
       }
 
@@ -240,9 +249,10 @@ export function WorkspaceProvider({ children }) {
     } catch (error) {
       showError(error);
     } finally {
+      workspaceLoadRef.current = false;
       if (!silent) setLoading(false);
     }
-  }, [activeProjectId, api, session.apiBase, session.tenant?.id, session.token, setActiveProjectId, showError]);
+  }, [api, session.apiBase, session.tenant?.id, session.token, setActiveProjectId, showError]);
 
   useEffect(() => { loadWorkspace(); }, [loadWorkspace]);
 
