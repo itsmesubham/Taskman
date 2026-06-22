@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taskman-postgres
+    environment:
+      POSTGRES_DB: taskman
+      POSTGRES_USER: taskman
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - taskman_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskman -d taskman"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: taskman-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://taskman:${POSTGRES_PASSWORD}@postgres:5432/taskman
+      JWT_SECRET: ${JWT_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      CORS_ORIGINS: https://taskman.fnetrix.com,http://localhost:3000,http://localhost:3001,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:5173
+    ports:
+      - "127.0.0.1:18080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: taskman-frontend
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:13000:80"
+    restart: unless-stopped
+
+volumes:
+  taskman_postgres_data:
