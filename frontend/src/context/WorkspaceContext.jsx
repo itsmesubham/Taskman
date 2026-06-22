@@ -286,38 +286,27 @@ export function WorkspaceProvider({ children }) {
 
         const preferredTenantId = localStorage.getItem('taskman_active_tenant') || nextUser?.active_tenant_id || '';
         const preferredMembership = nextMemberships.find((membership) => membership.tenant_id === preferredTenantId);
-        const activateTenant = async (tenantId, membershipRole = 'MEMBER') => {
-          const result = await api.patch('/users/me/active-tenant', { tenant_id: tenantId });
-          if (cancelled) return;
-          const nextTenant = result.tenant || null;
-          const nextSession = {
+        const fallbackMembership = nextMemberships[0] || null;
+        const activeMembership = preferredMembership || fallbackMembership;
+
+        if (activeMembership) {
+          const activeTenant = {
+            id: activeMembership.tenant_id,
+            name: activeMembership.tenant_name || 'Workspace',
+            slug: activeMembership.tenant_slug || '',
+          };
+          localStorage.setItem('taskman_active_tenant', activeMembership.tenant_id || '');
+          updateSession({
             ...session,
             user: {
               ...(nextUser || session.user || {}),
-              role: result.membership?.role || membershipRole,
-              active_tenant_id: result.active_tenant_id || tenantId
+              role: activeMembership.role || nextUser?.role || session.user?.role,
+              active_tenant_id: activeMembership.tenant_id
             },
-            tenant: nextTenant,
+            tenant: activeTenant,
             apiBase: session.apiBase || DEFAULT_API_BASE
-          };
-          localStorage.setItem('taskman_active_tenant', tenantId || '');
-          updateSession(nextSession);
-          setMemberships(result.memberships || nextMemberships);
-        };
-
-        if (preferredMembership && session.tenant?.id === preferredMembership.tenant_id) {
-          setAuthStatus('ready');
-          return;
-        }
-
-        if (preferredMembership) {
-          await activateTenant(preferredMembership.tenant_id, preferredMembership.role);
-          setAuthStatus('ready');
-          return;
-        }
-
-        if (nextMemberships.length === 1) {
-          await activateTenant(nextMemberships[0].tenant_id, nextMemberships[0].role);
+          });
+          setMemberships(nextMemberships);
           setAuthStatus('ready');
           return;
         }

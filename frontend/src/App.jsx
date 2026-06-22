@@ -6,20 +6,9 @@ import WorkspacePicker from './screens/WorkspacePicker.jsx';
 import InviteAcceptScreen from './screens/InviteAcceptScreen.jsx';
 
 function AppGate() {
-  const { session, authStatus, bootstrapReady } = useWorkspace();
+  const { session, authStatus } = useWorkspace();
 
   if (!session.token) return <AuthScreen />;
-  if (!bootstrapReady) {
-    return (
-      <div className="workspace-setup-screen">
-        <section className="workspace-setup-card panel">
-          <p className="eyebrow">TASKMAN</p>
-          <h1>Loading workspace</h1>
-          <p className="muted">Checking your memberships and workspace access.</p>
-        </section>
-      </div>
-    );
-  }
   if (authStatus === 'invite') return <InviteAcceptScreen />;
   if (authStatus === 'onboarding') return <TenantOnboarding />;
   if (authStatus === 'picker') return <WorkspacePicker />;
