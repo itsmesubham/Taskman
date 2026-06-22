@@ -286,6 +286,24 @@ export function WorkspaceProvider({ children }) {
 
         const preferredTenantId = localStorage.getItem('taskman_active_tenant') || nextUser?.active_tenant_id || '';
         const preferredMembership = nextMemberships.find((membership) => membership.tenant_id === preferredTenantId);
+        const activateTenant = async (tenantId, membershipRole = 'MEMBER') => {
+          const result = await api.patch('/users/me/active-tenant', { tenant_id: tenantId });
+          if (cancelled) return;
+          const nextTenant = result.tenant || null;
+          const nextSession = {
+            ...session,
+            user: {
+              ...(nextUser || session.user || {}),
+              role: result.membership?.role || membershipRole,
+              active_tenant_id: result.active_tenant_id || tenantId
+            },
+            tenant: nextTenant,
+            apiBase: session.apiBase || DEFAULT_API_BASE
+          };
+          localStorage.setItem('taskman_active_tenant', tenantId || '');
+          updateSession(nextSession);
+          setMemberships(result.memberships || nextMemberships);
+        };
 
         if (preferredMembership && session.tenant?.id === preferredMembership.tenant_id) {
           setAuthStatus('ready');
@@ -293,13 +311,13 @@ export function WorkspaceProvider({ children }) {
         }
 
         if (preferredMembership) {
-          await setActiveTenant(preferredMembership.tenant_id, { silent: true, userOverride: nextUser });
+          await activateTenant(preferredMembership.tenant_id, preferredMembership.role);
           setAuthStatus('ready');
           return;
         }
 
         if (nextMemberships.length === 1) {
-          await setActiveTenant(nextMemberships[0].tenant_id, { silent: true, userOverride: nextUser });
+          await activateTenant(nextMemberships[0].tenant_id, nextMemberships[0].role);
           setAuthStatus('ready');
           return;
         }
@@ -322,7 +340,7 @@ export function WorkspaceProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, [api, inviteCode, session.apiBase, session.token, setActiveTenant, showError, updateSession]);
+  }, [api, inviteCode, session.apiBase, session.token, showError, updateSession]);
 
   useEffect(() => {
     if (!session.token || !session.tenant?.id || !isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) return undefined;
