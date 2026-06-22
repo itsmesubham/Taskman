@@ -253,7 +253,7 @@ export function WorkspaceProvider({ children }) {
       setBootstrapReady(false);
       try {
         const [meRes, myRes] = await Promise.all([
-          api.get('/me'),
+          api.get('/users/me'),
           api.get('/tenants/my')
         ]);
         if (cancelled) return;
