@@ -99,7 +99,7 @@ def get_current_user(
         FROM tenant_members tm
         JOIN tenants t ON t.id = tm.tenant_id
         WHERE tm.user_id = %s AND tm.status = 'ACTIVE'
-        ORDER BY tm.created_at ASC
+        ORDER BY tm.joined_at ASC
         """,
         (user_id,),
     )
