@@ -1,4 +1,4 @@
-export const DEFAULT_API_BASE = 'http://localhost:8080/api';
+export const DEFAULT_API_BASE = "https://taskman.fnetrix.com/api";
 
 export function normalizeApiBase(value) {
   const raw = (value || DEFAULT_API_BASE).trim();
