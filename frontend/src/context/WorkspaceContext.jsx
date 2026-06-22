@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiClient, DEFAULT_API_BASE, isSecureApiBase, normalizeApiBase } from '../api/client.js';
 import { readJson, saveJson } from '../utils.js';
+import { buildActiveWorkspaceContext } from '../utils/workspaceSession.js';
 
 const WorkspaceContext = createContext(null);
 
@@ -285,16 +286,18 @@ export function WorkspaceProvider({ children }) {
       setBootstrapReady(false);
       try {
         if (session.tenant?.id && Array.isArray(session.memberships) && session.memberships.length > 0) {
-          setMemberships(session.memberships);
-          const activeMembership = session.memberships.find((membership) => membership.tenant_id === session.tenant.id) || session.memberships[0] || null;
-          if (activeMembership && (!session.user?.role || !session.user?.active_tenant_id)) {
+          const workspace = buildActiveWorkspaceContext({
+            user: session.user,
+            memberships: session.memberships,
+            preferredTenantId: session.tenant.id
+          });
+          setMemberships(workspace.memberships);
+          if (workspace.user && (!session.user?.role || !session.user?.active_tenant_id)) {
             updateSession({
               ...session,
-              user: {
-                ...(session.user || {}),
-                role: session.user?.role || activeMembership.role || null,
-                active_tenant_id: session.user?.active_tenant_id || activeMembership.tenant_id
-              }
+              user: workspace.user,
+              tenant: workspace.tenant || session.tenant,
+              memberships: workspace.memberships
             });
           }
           setAuthStatus(inviteCode ? 'invite' : 'ready');
@@ -327,26 +330,21 @@ export function WorkspaceProvider({ children }) {
         }
 
         const preferredTenantId = localStorage.getItem('taskman_active_tenant') || nextUser?.active_tenant_id || '';
-        const preferredMembership = nextMemberships.find((membership) => membership.tenant_id === preferredTenantId) || nextMemberships[0] || null;
-        if (preferredMembership) {
-          const activeTenant = {
-            id: preferredMembership.tenant_id,
-            name: preferredMembership.tenant_name || 'Workspace',
-            slug: preferredMembership.tenant_slug || '',
-          };
-          localStorage.setItem('taskman_active_tenant', preferredMembership.tenant_id || '');
+        const workspace = buildActiveWorkspaceContext({
+          user: nextUser || session.user || null,
+          memberships: nextMemberships,
+          preferredTenantId: preferredTenantId || null
+        });
+        if (workspace.tenant) {
+          localStorage.setItem('taskman_active_tenant', workspace.tenant.id || '');
           updateSession({
             ...session,
-            user: {
-              ...(nextUser || session.user || {}),
-              role: preferredMembership.role || nextUser?.role || session.user?.role,
-              active_tenant_id: preferredMembership.tenant_id
-            },
-            tenant: activeTenant,
-            memberships: nextMemberships,
+            user: workspace.user,
+            tenant: workspace.tenant,
+            memberships: workspace.memberships,
             apiBase: session.apiBase || DEFAULT_API_BASE
           });
-          setMemberships(nextMemberships);
+          setMemberships(workspace.memberships);
           setAuthStatus('ready');
           return;
         }

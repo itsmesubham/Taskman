@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import types
 import unittest
@@ -27,11 +28,13 @@ if "psycopg_pool" not in sys.modules:
     sys.modules["psycopg_pool"] = psycopg_pool
 
 from app.routers.invites import accept_invite
+from app.routers.projects import ProjectCreate, create_project
 from app.routers.sprints import sprint_schedule
 from app.routers.tenants import TenantCreate, create_tenant
 from app.routers.workspaces import board_defaults as workspace_board_defaults
 from app.routers.workspaces import schedule as workspace_schedule
 from app.routers.tenants import my_tenants
+from app.routers.users import ActiveTenantRequest, set_active_tenant
 from app.security import get_current_user
 from app.services.memberships import active_membership_for_user
 from app.services.workspace_defaults import ensure_default_project, ensure_workspace_board_defaults
@@ -294,6 +297,55 @@ class WorkspaceBootstrapTests(unittest.TestCase):
         self.assertEqual(len(result["tenants"]), 2)
         self.assertEqual(result["tenants"][0]["tenant_id"], "tenant-1")
         mock_memberships_for_user.assert_called_once_with("user-1")
+
+    @patch("app.routers.users.memberships_for_user", return_value=[
+        {"tenant_id": "tenant-1", "role": "OWNER", "tenant_name": "Grabbit", "tenant_slug": "grabbit"}
+    ])
+    @patch("app.routers.users.get_conn")
+    @patch("app.routers.users.fetch_one")
+    def test_set_active_tenant_returns_updated_session_and_token(self, mock_fetch_one, mock_get_conn, mock_memberships_for_user):
+        mock_fetch_one.return_value = {"role": "OWNER", "id": "tenant-1", "name": "Grabbit", "slug": "grabbit"}
+
+        def resolver(query, params):
+            normalized = " ".join(query.split()).lower()
+            if normalized.startswith("update users set active_tenant_id"):
+                return {"active_tenant_id": "tenant-1"}
+            return None
+
+        mock_get_conn.return_value = FakeConnManager(resolver)
+
+        response = set_active_tenant(ActiveTenantRequest(tenant_id="tenant-1"), current_user={"id": "user-1", "active_tenant_id": None})
+
+        self.assertEqual(response["active_tenant_id"], "tenant-1")
+        self.assertEqual(response["membership"]["role"], "OWNER")
+        self.assertEqual(response["tenant"]["id"], "tenant-1")
+        self.assertEqual(len(response["memberships"]), 1)
+        mock_memberships_for_user.assert_called_once_with("user-1")
+
+    @patch("app.routers.projects.event_bus.publish")
+    @patch("app.routers.projects.record_activity")
+    @patch("app.routers.projects.get_conn")
+    @patch("app.routers.projects.fetch_one")
+    def test_create_project_reuses_existing_row_on_conflict(self, mock_fetch_one, mock_get_conn, mock_record_activity, mock_publish):
+        mock_fetch_one.return_value = None
+        project_row = {"id": "project-1", "tenant_id": "tenant-1", "key": "GRABBIT", "name": "Grabbit", "visibility": "EVERYONE"}
+
+        def resolver(query, params):
+            normalized = " ".join(query.split()).lower()
+            if normalized.startswith("insert into projects"):
+                return None
+            if normalized.startswith("select * from projects where tenant_id = %s and key = %s limit 1"):
+                return project_row
+            return None
+
+        mock_get_conn.return_value = FakeConnManager(resolver)
+
+        response = asyncio.run(create_project(ProjectCreate(name="Grabbit"), current_user={"id": "user-1", "role": "OWNER", "tenant_id": "tenant-1"}))
+
+        self.assertEqual(response["project"]["id"], "project-1")
+        self.assertEqual(response["project"]["key"], "GRABBIT")
+        mock_record_activity.assert_called_once()
+        mock_publish.assert_awaited_once()
 
 
 if __name__ == "__main__":

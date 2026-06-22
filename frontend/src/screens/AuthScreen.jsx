@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DEFAULT_API_BASE, ApiClient } from '../api/client.js';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
+import { buildAuthSessionFromResult, buildInviteAcceptedSession } from '../utils/workspaceSession.js';
 
 export default function AuthScreen() {
   const { updateSession, inviteCode, navigate } = useWorkspace();
@@ -38,47 +39,12 @@ export default function AuthScreen() {
         ? { email, password }
         : { name: fullName, email, password };
       const result = await authClient.post(mode === 'login' ? '/auth/login' : '/auth/signup', payload);
-      const memberships = result.memberships || [];
-      const preferredTenantId = result.user?.active_tenant_id || memberships[0]?.tenant_id || null;
-      const preferredMembership = memberships.find((membership) => membership.tenant_id === preferredTenantId) || memberships[0] || null;
-      const activeTenant = preferredMembership ? {
-        id: preferredMembership.tenant_id,
-        name: preferredMembership.tenant_name || 'Workspace',
-        slug: preferredMembership.tenant_slug || ''
-      } : null;
-
-      const baseSession = {
-        apiBase: DEFAULT_API_BASE,
-        token: result.access_token,
-        user: {
-          ...result.user,
-          role: result.user?.role || preferredMembership?.role || null,
-          active_tenant_id: result.user?.active_tenant_id || preferredTenantId
-        },
-        tenant: activeTenant,
-        memberships
-      };
+      const baseSession = buildAuthSessionFromResult(result, DEFAULT_API_BASE);
 
       if (inviteCode) {
         const inviteClient = new ApiClient(() => ({ token: result.access_token, apiBase: DEFAULT_API_BASE }));
         const inviteResult = await inviteClient.post(`/invites/${inviteCode}/accept`, {});
-        const inviteMemberships = inviteResult.memberships || [];
-        const inviteTenant = inviteResult.tenant ? {
-          id: inviteResult.tenant.id,
-          name: inviteResult.tenant.name,
-          slug: inviteResult.tenant.slug || ''
-        } : null;
-        updateSession({
-          ...baseSession,
-          token: inviteResult.access_token || baseSession.token,
-          user: {
-            ...(baseSession.user || {}),
-            role: inviteResult.membership?.role || baseSession.user?.role || 'MEMBER',
-            active_tenant_id: inviteResult.active_tenant_id || inviteTenant?.id || baseSession.user?.active_tenant_id || null
-          },
-          tenant: inviteTenant || baseSession.tenant,
-          memberships: inviteMemberships.length ? inviteMemberships : baseSession.memberships
-        });
+        updateSession(buildInviteAcceptedSession(baseSession, inviteResult));
         navigate('/');
         return;
       }

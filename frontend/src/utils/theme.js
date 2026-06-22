@@ -13,8 +13,12 @@ export function getResolvedTheme(preference) {
 
 export function readStoredThemePreference() {
   if (typeof window === 'undefined') return 'system';
-  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return THEME_OPTIONS.includes(stored) ? stored : 'system';
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return THEME_OPTIONS.includes(stored) ? stored : 'system';
+  } catch {
+    return 'system';
+  }
 }
 
 export function applyThemeToDocument(resolvedTheme) {

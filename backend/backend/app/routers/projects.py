@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from ..database import fetch_all, fetch_one, execute
+from ..database import fetch_all, fetch_one, execute, get_conn
 from ..security import get_current_user, require_role
 from ..utils import row_to_json, rows_to_json, project_key
 from ..services.activity import record_activity
@@ -44,17 +44,30 @@ def list_projects(current_user: dict = Depends(get_current_user), include_archiv
 async def create_project(payload: ProjectCreate, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
     key = project_key(payload.key or payload.name)
-    existing = fetch_one("SELECT id FROM projects WHERE tenant_id = %s AND key = %s", (tenant_id, key))
-    if existing:
-        raise HTTPException(status_code=409, detail="Project key already exists in this tenant")
-    project = execute(
-        """
-        INSERT INTO projects (tenant_id, name, key, description, visibility, created_by)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING *
-        """,
-        (tenant_id, payload.name.strip(), key, payload.description, payload.visibility, current_user["id"]),
-    )
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO projects (tenant_id, name, key, description, visibility, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (tenant_id, key)
+                    DO NOTHING
+                    RETURNING *
+                    """,
+                    (tenant_id, payload.name.strip(), key, payload.description, payload.visibility, current_user["id"]),
+                )
+                project = cur.fetchone()
+                if not project:
+                    cur.execute("SELECT * FROM projects WHERE tenant_id = %s AND key = %s LIMIT 1", (tenant_id, key))
+                    project = cur.fetchone()
+    except Exception as exc:
+        code = getattr(exc, "sqlstate", None)
+        if code == "23505":
+            raise HTTPException(status_code=409, detail="Project key already exists in this tenant")
+        raise
+    if not project:
+        raise HTTPException(status_code=500, detail="Project creation failed")
     record_activity(tenant_id, current_user["id"], "project_created", f"Created project {project['key']}", project_id=project["id"])
     await event_bus.publish(str(tenant_id), "project_created", {"project": row_to_json(project)})
     return {"project": row_to_json(project)}
