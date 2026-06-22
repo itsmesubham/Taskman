@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taskman-postgres
+    environment:
+      POSTGRES_DB: taskman
+      POSTGRES_USER: taskman
+      POSTGRES_PASSWORD: taskman
+    ports:
+      - "5432:5432"
+    volumes:
+      - taskman_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskman -d taskman"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taskman-backend
+    environment:
+      DATABASE_URL: postgresql://taskman:taskman@postgres:5432/taskman
+      JWT_SECRET: change-this-secret-in-production
+      ACCESS_TOKEN_EXPIRE_MINUTES: "10080"
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  taskman_postgres_data:
