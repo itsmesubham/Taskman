@@ -5,12 +5,19 @@ import { readJson, saveJson } from '../utils.js';
 const WorkspaceContext = createContext(null);
 
 export function WorkspaceProvider({ children }) {
-  const [session, setSession] = useState(() => readJson('taskman_session', {
-    token: null,
-    user: null,
-    tenant: null,
-    apiBase: DEFAULT_API_BASE
-  }));
+  const [session, setSession] = useState(() => {
+    const persisted = readJson('taskman_session', {
+      token: null,
+      user: null,
+      tenant: null,
+      apiBase: DEFAULT_API_BASE
+    });
+    if (!persisted?.token) return persisted;
+    return {
+      ...persisted,
+      tenant: null
+    };
+  });
   const [page, setPage] = useState('board');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState(null);
