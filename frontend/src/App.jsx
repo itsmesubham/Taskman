@@ -1,4 +1,5 @@
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext.jsx';
+import { ThemeProvider } from './context/ThemeContext.jsx';
 import AppShell from './layout/AppShell.jsx';
 import AuthScreen from './screens/AuthScreen.jsx';
 import TenantOnboarding from './screens/TenantOnboarding.jsx';
@@ -17,8 +18,10 @@ function AppGate() {
 
 export default function App() {
   return (
-    <WorkspaceProvider>
-      <AppGate />
-    </WorkspaceProvider>
+    <ThemeProvider>
+      <WorkspaceProvider>
+        <AppGate />
+      </WorkspaceProvider>
+    </ThemeProvider>
   );
 }

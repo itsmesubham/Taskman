@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
+import { useTheme } from '../context/ThemeContext.jsx';
 import { initials } from '../utils.js';
 
 export default function UserMenu() {
   const { session, setPage, logout } = useWorkspace();
+  const { themePreference, toggleTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -24,6 +26,7 @@ export default function UserMenu() {
         <div className="user-menu-dropdown">
           <button type="button" onClick={() => { setPage('settings'); setOpen(false); }}>Profile</button>
           <button type="button" onClick={() => { setPage('settings'); setOpen(false); }}>Settings</button>
+          <button type="button" onClick={() => { toggleTheme(); setOpen(false); }}>Theme: {themePreference === 'system' ? 'System' : themePreference === 'dark' ? 'Dark' : 'Light'}</button>
           <button type="button" onClick={() => { setOpen(false); logout(); }}>Logout</button>
         </div>
       )}

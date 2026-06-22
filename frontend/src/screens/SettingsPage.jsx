@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
+import { useTheme } from '../context/ThemeContext.jsx';
 import { initials } from '../utils.js';
 
 const SHORTCUTS = [
@@ -19,6 +20,7 @@ function inviteUrlFromPath(path) {
 
 export default function SettingsPage() {
   const { session, members, memberships, api, showError, showSuccess, loadWorkspace, setActiveTenant, createWorkspace, acceptInvite } = useWorkspace();
+  const { themePreference, resolvedTheme, setThemePreference } = useTheme();
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('MEMBER');
   const [workspaceName, setWorkspaceName] = useState('');
@@ -31,6 +33,11 @@ export default function SettingsPage() {
   const isAdmin = currentRole === 'ADMIN';
   const isOwner = currentRole === 'OWNER';
   const canManageInvite = isAdmin || isOwner;
+  const themeOptions = [
+    { key: 'system', label: 'System', helper: 'Follow device setting' },
+    { key: 'light', label: 'Light', helper: 'Bright workspace' },
+    { key: 'dark', label: 'Dark', helper: 'Low-light workspace' }
+  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -135,6 +142,32 @@ export default function SettingsPage() {
             <span>Slug</span><strong>{session.tenant?.slug}</strong>
             <span>User</span><strong>{session.user?.name}</strong>
             <span>Role</span><strong>{currentRole || 'MEMBER'}</strong>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-head">
+            <h3>Appearance</h3>
+            <span>{resolvedTheme === 'dark' ? 'Dark mode' : 'Light mode'}</span>
+          </div>
+          <p className="muted">Choose how Taskman looks on this device.</p>
+          <div className="theme-choice-grid">
+            {themeOptions.map((option) => (
+              <button
+                type="button"
+                key={option.key}
+                className={`theme-choice ${themePreference === option.key ? 'active' : ''}`}
+                onClick={() => setThemePreference(option.key)}
+              >
+                <span className="theme-choice-icon">
+                  <span className="theme-choice-ring" />
+                </span>
+                <div>
+                  <strong>{option.label}</strong>
+                  <span>{option.helper}</span>
+                </div>
+              </button>
+            ))}
           </div>
         </section>
 
