@@ -306,7 +306,10 @@ export function WorkspaceProvider({ children }) {
 
         setAuthStatus('picker');
       } catch (error) {
-        if (!cancelled) showError(error);
+        if (!cancelled) {
+          showError(error);
+          setAuthStatus('ready');
+        }
       } finally {
         if (!cancelled) {
           setBootstrapReady(true);

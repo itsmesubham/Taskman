@@ -9,7 +9,7 @@ function AppGate() {
   const { session, authStatus, bootstrapReady } = useWorkspace();
 
   if (!session.token) return <AuthScreen />;
-  if (!bootstrapReady || authStatus === 'loading') {
+  if (!bootstrapReady) {
     return (
       <div className="workspace-setup-screen">
         <section className="workspace-setup-card panel">
