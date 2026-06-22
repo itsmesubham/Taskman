@@ -67,6 +67,15 @@ export default function SettingsPage() {
     } catch (error) { showError(error); }
   };
 
+  const removeMember = async (member) => {
+    if (!window.confirm(`Remove ${member.name} from this workspace?`)) return;
+    try {
+      await api.delete(`/tenants/${session.tenant.id}/members/${member.id}`);
+      showSuccess('Member removed');
+      await loadWorkspace(true, true);
+    } catch (error) { showError(error); }
+  };
+
   const copyInvite = async () => {
     try {
       await navigator.clipboard.writeText(inviteLink);
@@ -175,6 +184,9 @@ export default function SettingsPage() {
                 <span>{member.email}</span>
               </div>
               <em>{member.role}</em>
+              {canManageInvite && member.id !== session.user?.id && (
+                <button type="button" className="ghost tiny" onClick={() => removeMember(member)}>Remove</button>
+              )}
             </div>
           ))}
         </div>

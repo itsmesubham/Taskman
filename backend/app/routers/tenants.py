@@ -215,3 +215,42 @@ async def add_member(
     record_activity(tenant_id, current_user["id"], "member_added", f"Added {user['email']} as {payload.role}")
     await event_bus.publish(tenant_id, "member_added", {"user_id": user["id"], "email": user["email"], "role": payload.role})
     return {"member": row_to_json({**user, "role": membership["role"], "joined_at": membership["joined_at"]})}
+
+
+@router.delete("/{tenant_id}/members/{user_id}")
+async def remove_member(
+    tenant_id: str,
+    user_id: str,
+    current_user: dict = Depends(require_role("OWNER", "ADMIN")),
+):
+    if resolve_tenant_id(current_user) != tenant_id:
+        raise HTTPException(status_code=403, detail="Cannot access another tenant")
+    if current_user["id"] == user_id:
+        raise HTTPException(status_code=400, detail="Use leave workspace instead")
+    target = fetch_one(
+        "SELECT tm.role, u.name, u.email FROM tenant_members tm JOIN users u ON u.id = tm.user_id WHERE tm.tenant_id = %s AND tm.user_id = %s",
+        (tenant_id, user_id),
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Workspace member not found")
+    target_role = str(target["role"]).upper()
+    current_role = str(current_user.get("role") or "").upper()
+    if target_role == "OWNER" and current_role != "OWNER":
+        raise HTTPException(status_code=403, detail="Only an owner can remove another owner")
+    removed = execute(
+        "DELETE FROM tenant_members WHERE tenant_id = %s AND user_id = %s RETURNING *",
+        (tenant_id, user_id),
+    )
+    if not removed:
+        raise HTTPException(status_code=404, detail="Workspace member not found")
+    execute(
+        """
+        UPDATE users
+        SET active_tenant_id = NULL, updated_at = now()
+        WHERE id = %s AND active_tenant_id = %s
+        """,
+        (user_id, tenant_id),
+    )
+    record_activity(tenant_id, current_user["id"], "member_removed", f"Removed {target['email']}")
+    await event_bus.publish(tenant_id, "member_removed", {"user_id": user_id, "email": target["email"]})
+    return {"ok": True}

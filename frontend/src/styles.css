@@ -239,6 +239,7 @@ input:-webkit-autofill:focus {
 .saved-view-row > button { width: 100%; }
 .saved-view-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .saved-view-actions .ghost, .saved-view-actions .danger { min-height: 32px; padding: 6px 10px; font-size: 12px; box-shadow: none; }
+.ghost.tiny { min-height: 30px; padding: 6px 10px; font-size: 12px; box-shadow: none; }
 .board-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .summary-card { border: 1px solid var(--border-subtle); background: var(--surface); border-radius: 12px; padding: 9px 11px; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; box-shadow: var(--shadow-soft); }
 .summary-card span { color: var(--text-muted); font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
