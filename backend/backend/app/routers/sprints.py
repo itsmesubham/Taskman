@@ -54,7 +54,7 @@ def ensure_project(project_id: str, tenant_id: str):
 
 def ensure_sprint(sprint_id: str, tenant_id: str):
     sprint = fetch_one(
-        "SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at FROM sprints WHERE id = %s AND tenant_id = %s",
+        "SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, created_at, updated_at FROM sprints WHERE id = %s AND tenant_id = %s",
         (sprint_id, tenant_id),
     )
     if not sprint:
@@ -77,7 +77,7 @@ def list_sprints(current_user: dict = Depends(get_current_user), project_id: str
         params.append(status)
     rows = fetch_all(
         f"""
-        SELECT s.id, s.tenant_id, s.project_id, s.name, s.goal, s.status, s.start_date, s.end_date, s.created_by, s.issue_count, s.created_at, s.updated_at,
+        SELECT s.id, s.tenant_id, s.project_id, s.name, s.goal, s.status, s.start_date, s.end_date, s.created_by, s.created_at, s.updated_at,
                p.key AS project_key, p.name AS project_name,
                COUNT(i.id) AS issue_count,
                COUNT(i.id) FILTER (WHERE i.status = 'DONE') AS done_count,
@@ -159,6 +159,8 @@ async def start_sprint(sprint_id: str, current_user: dict = Depends(require_role
     if active:
         raise HTTPException(status_code=409, detail="Another sprint is already active for this project")
     updated = execute("UPDATE sprints SET status = 'ACTIVE', updated_at = now() WHERE id = %s AND tenant_id = %s RETURNING *", (sprint_id, tenant_id))
+    if not updated:
+        raise HTTPException(status_code=500, detail="Unable to start sprint")
     execute("UPDATE issues SET status = 'TODO', updated_at = now() WHERE sprint_id = %s AND tenant_id = %s AND status = 'BACKLOG'", (sprint_id, tenant_id))
     record_activity(tenant_id, current_user["id"], "sprint_started", f"Started sprint {updated['name']}", project_id=updated["project_id"], sprint_id=sprint_id)
     await event_bus.publish(tenant_id, "sprint_started", {"sprint": row_to_json(updated)})

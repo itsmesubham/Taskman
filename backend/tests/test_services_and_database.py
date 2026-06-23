@@ -272,7 +272,7 @@ class ServiceAndDatabaseTests(unittest.TestCase):
                 return None
             if normalized.startswith("update sprints set status = 'completed'"):
                 return None
-            if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
+            if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
                 return {"id": "sprint-1", "status": "PLANNED", "project_id": "project-1"}
             if normalized.startswith("update sprints set status = 'active'"):
                 return {"id": "sprint-1", "status": "ACTIVE", "project_id": "project-1"}
@@ -294,7 +294,7 @@ class ServiceAndDatabaseTests(unittest.TestCase):
                 return None
             if normalized.startswith("update sprints set status = 'completed'"):
                 return None
-            if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
+            if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
                 return None
             if normalized.startswith("insert into sprints"):
                 return {"id": "sprint-2", "status": "ACTIVE", "name": "July 2026", "project_id": "project-1"}
@@ -320,7 +320,7 @@ class ServiceAndDatabaseTests(unittest.TestCase):
                 return None
             if normalized.startswith("update sprints set status = 'completed'"):
                 return None
-            if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
+            if normalized.startswith("select id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, created_at, updated_at from sprints where tenant_id = %s and project_id = %s and start_date = %s and end_date = %s"):
                 return None
             if normalized.startswith("insert into sprints"):
                 return {"id": "sprint-2", "status": "ACTIVE", "name": "July 2026", "project_id": "project-1"}

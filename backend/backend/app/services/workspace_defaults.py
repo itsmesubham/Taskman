@@ -144,7 +144,7 @@ def ensure_current_monthly_sprint(tenant_id: str, project_id: str):
             )
             cur.execute(
                 """
-                SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at
+                SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, created_at, updated_at
                 FROM sprints
                 WHERE tenant_id = %s AND project_id = %s AND start_date = %s AND end_date = %s
                 ORDER BY created_at ASC
@@ -182,7 +182,7 @@ def ensure_current_monthly_sprint(tenant_id: str, project_id: str):
                 return sprint
             cur.execute(
                 """
-                SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at
+                SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, created_at, updated_at
                 FROM sprints
                 WHERE tenant_id = %s AND project_id = %s AND start_date = %s AND end_date = %s
                 ORDER BY created_at ASC
@@ -217,7 +217,7 @@ def get_workspace_sprint_schedule(tenant_id: str, project_id: str | None = None)
 
     last_created_sprint = fetch_one(
         """
-        SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at
+        SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, created_at, updated_at
         FROM sprints
         WHERE tenant_id = %s AND project_id = %s
         ORDER BY created_at DESC
@@ -227,7 +227,7 @@ def get_workspace_sprint_schedule(tenant_id: str, project_id: str | None = None)
     )
     upcoming = fetch_one(
         """
-        SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, issue_count, created_at, updated_at
+        SELECT id, tenant_id, project_id, name, goal, status, start_date, end_date, created_by, created_at, updated_at
         FROM sprints
         WHERE tenant_id = %s AND project_id = %s AND start_date > %s
         ORDER BY start_date ASC

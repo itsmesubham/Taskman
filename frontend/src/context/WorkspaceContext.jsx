@@ -248,14 +248,6 @@ export function WorkspaceProvider({ children }) {
         setActiveProjectId(nextProjects[0]?.id || '');
       }
 
-      if (session.tenant?.id) {
-        try {
-          const memberRes = await api.get(`/tenants/${session.tenant.id}/members`);
-          setMembers(memberRes.members || []);
-        } catch {
-          setMembers([]);
-        }
-      }
     } catch (error) {
       showError(error);
       setEventStatus(session.token ? 'live' : 'offline');
@@ -265,10 +257,32 @@ export function WorkspaceProvider({ children }) {
     }
   }, [api, session.apiBase, session.tenant?.id, session.token, setActiveProjectId, showError]);
 
+  const loadMembers = useCallback(async () => {
+    const tenantId = session.tenant?.id || '';
+    if (!session.token || !tenantId) {
+      setMembers([]);
+      return;
+    }
+    try {
+      const memberRes = await api.get(`/tenants/${tenantId}/members`);
+      setMembers(memberRes.members || []);
+    } catch {
+      setMembers([]);
+    }
+  }, [api, session.tenant?.id, session.token]);
+
   useEffect(() => {
     if (!session.token || !session.tenant?.id) return;
     loadWorkspace();
   }, [loadWorkspace, session.token, session.tenant?.id]);
+
+  useEffect(() => {
+    if (!session.token || !session.tenant?.id) {
+      setMembers([]);
+      return;
+    }
+    loadMembers();
+  }, [loadMembers, session.token, session.tenant?.id]);
 
   useEffect(() => {
     let cancelled = false;
