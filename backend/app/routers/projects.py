@@ -23,11 +23,62 @@ class ProjectUpdate(BaseModel):
     visibility: str | None = Field(default=None, pattern="^(EVERYONE|SOME_USERS|PRIVATE)$")
 
 
+class ProjectRepositoryCreate(BaseModel):
+    provider: str = Field(default="github", pattern="^github$")
+    repo: str = Field(min_length=1, max_length=200)
+    default_branch: str = Field(default="main", max_length=120)
+    branch_prefix: str = Field(default="", max_length=120)
+    is_default: bool = False
+
+
+class ProjectRepositoryUpdate(BaseModel):
+    default_branch: str | None = Field(default=None, max_length=120)
+    branch_prefix: str | None = Field(default=None, max_length=120)
+    is_default: bool | None = None
+    status: str | None = Field(default=None, pattern="^(ACTIVE|DISABLED)$")
+
+
 def resolve_tenant_id(current_user: dict) -> str:
     tenant_id = current_user.get("tenant_id") or current_user.get("active_tenant_id")
     if not tenant_id:
         raise HTTPException(status_code=400, detail="Workspace not selected")
     return str(tenant_id)
+
+
+def ensure_project(project_id: str, tenant_id: str):
+    project = fetch_one(
+        "SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE id = %s AND tenant_id = %s",
+        (project_id, tenant_id),
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+def ensure_project_permissions(project: dict, current_user: dict):
+    if current_user["role"] not in ("OWNER", "ADMIN") and project.get("created_by") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+
+def ensure_project_repository(project_repository_id: str, tenant_id: str, project_id: str | None = None):
+    params = [tenant_id, project_repository_id]
+    where = ["pr.tenant_id = %s", "pr.id = %s"]
+    if project_id:
+        where.append("pr.project_id = %s")
+        params.append(project_id)
+    repository = fetch_one(
+        f"""
+        SELECT pr.id, pr.tenant_id, pr.project_id, pr.provider, pr.repo, pr.default_branch, pr.branch_prefix, pr.is_default, pr.status, pr.created_by, pr.created_at, pr.updated_at,
+               p.key AS project_key, p.name AS project_name
+        FROM project_repositories pr
+        JOIN projects p ON p.id = pr.project_id
+        WHERE {' AND '.join(where)}
+        """,
+        tuple(params),
+    )
+    if not repository:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    return repository
 
 
 @router.get("")
@@ -38,6 +89,35 @@ def list_projects(current_user: dict = Depends(get_current_user), include_archiv
     else:
         rows = fetch_all("SELECT id, tenant_id, name, key, description, visibility, status, issue_counter, created_by, created_at, updated_at FROM projects WHERE tenant_id = %s AND status != 'ARCHIVED' ORDER BY created_at DESC", (tenant_id,))
     return {"projects": rows_to_json(rows)}
+
+
+@router.get("/repositories")
+def list_project_repositories(current_user: dict = Depends(get_current_user), project_id: str | None = None):
+    tenant_id = resolve_tenant_id(current_user)
+    params = [tenant_id]
+    project_filter = ""
+    if project_id:
+        project_filter = "AND pr.project_id = %s"
+        params.append(project_id)
+    rows = fetch_all(
+        f"""
+        SELECT pr.id, pr.tenant_id, pr.project_id, pr.provider, pr.repo, pr.default_branch, pr.branch_prefix, pr.is_default, pr.status, pr.created_by, pr.created_at, pr.updated_at,
+               p.key AS project_key, p.name AS project_name,
+               COALESCE(task_counts.task_count, 0) AS linked_task_count
+        FROM project_repositories pr
+        JOIN projects p ON p.id = pr.project_id
+        LEFT JOIN (
+            SELECT repository_id, COUNT(*)::int AS task_count
+            FROM issues
+            WHERE tenant_id = %s AND repository_id IS NOT NULL
+            GROUP BY repository_id
+        ) task_counts ON task_counts.repository_id = pr.id
+        WHERE pr.tenant_id = %s {project_filter}
+        ORDER BY p.name ASC, pr.is_default DESC, pr.created_at ASC
+        """,
+        tuple([tenant_id] + params),
+    )
+    return {"repositories": rows_to_json(rows)}
 
 
 @router.post("")
@@ -71,6 +151,105 @@ async def create_project(payload: ProjectCreate, current_user: dict = Depends(ge
     record_activity(tenant_id, current_user["id"], "project_created", f"Created project {project['key']}", project_id=project["id"])
     await event_bus.publish(str(tenant_id), "project_created", {"project": row_to_json(project)})
     return {"project": row_to_json(project)}
+
+
+@router.post("/{project_id}/repositories")
+async def create_project_repository(project_id: str, payload: ProjectRepositoryCreate, current_user: dict = Depends(get_current_user)):
+    tenant_id = resolve_tenant_id(current_user)
+    project = ensure_project(project_id, tenant_id)
+    ensure_project_permissions(project, current_user)
+    repo = payload.repo.strip()
+    if "/" not in repo:
+        raise HTTPException(status_code=400, detail="GitHub repo must use owner/name format")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if payload.is_default:
+                cur.execute("UPDATE project_repositories SET is_default = false, updated_at = now() WHERE tenant_id = %s AND project_id = %s", (tenant_id, project_id))
+            cur.execute(
+                """
+                INSERT INTO project_repositories (tenant_id, project_id, provider, repo, default_branch, branch_prefix, is_default, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, project_id, provider, repo)
+                DO UPDATE SET
+                    default_branch = EXCLUDED.default_branch,
+                    branch_prefix = EXCLUDED.branch_prefix,
+                    is_default = CASE WHEN EXCLUDED.is_default THEN true ELSE project_repositories.is_default END,
+                    status = 'ACTIVE',
+                    updated_at = now()
+                RETURNING *
+                """,
+                (tenant_id, project_id, payload.provider, repo, payload.default_branch.strip() or "main", payload.branch_prefix.strip(), payload.is_default, current_user["id"]),
+            )
+            repository = cur.fetchone()
+            if payload.is_default:
+                cur.execute(
+                    "UPDATE project_repositories SET is_default = (id = %s), updated_at = now() WHERE tenant_id = %s AND project_id = %s AND id != %s",
+                    (repository["id"], tenant_id, project_id, repository["id"]),
+                )
+    record_activity(tenant_id, current_user["id"], "project_repository_created", f"Added repository {repository['repo']} to {project['key']}", project_id=project_id, metadata={"repository_id": str(repository["id"]), "repo": repository["repo"]})
+    await event_bus.publish(str(tenant_id), "project_repository_created", {"repository": row_to_json(repository), "project_id": project_id})
+    return {"repository": row_to_json(repository)}
+
+
+@router.patch("/{project_id}/repositories/{repository_id}")
+async def update_project_repository(project_id: str, repository_id: str, payload: ProjectRepositoryUpdate, current_user: dict = Depends(get_current_user)):
+    tenant_id = resolve_tenant_id(current_user)
+    project = ensure_project(project_id, tenant_id)
+    ensure_project_permissions(project, current_user)
+    repository = ensure_project_repository(repository_id, tenant_id, project_id)
+    default_branch = payload.default_branch.strip() if payload.default_branch is not None else repository["default_branch"]
+    branch_prefix = payload.branch_prefix.strip() if payload.branch_prefix is not None else repository["branch_prefix"]
+    status = payload.status or repository["status"]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if payload.is_default:
+                cur.execute("UPDATE project_repositories SET is_default = false, updated_at = now() WHERE tenant_id = %s AND project_id = %s", (tenant_id, project_id))
+            cur.execute(
+                """
+                UPDATE project_repositories
+                SET default_branch = %s,
+                    branch_prefix = %s,
+                    status = %s,
+                    is_default = CASE WHEN %s IS NULL THEN is_default ELSE %s END,
+                    updated_at = now()
+                WHERE id = %s AND tenant_id = %s
+                RETURNING *
+                """,
+                (default_branch, branch_prefix, status, payload.is_default, payload.is_default if payload.is_default is not None else repository["is_default"], repository_id, tenant_id),
+            )
+            updated = cur.fetchone()
+            if payload.is_default:
+                cur.execute(
+                    "UPDATE project_repositories SET is_default = (id = %s), updated_at = now() WHERE tenant_id = %s AND project_id = %s AND id != %s",
+                    (repository_id, tenant_id, project_id, repository_id),
+                )
+    record_activity(tenant_id, current_user["id"], "project_repository_updated", f"Updated repository {updated['repo']} for {project['key']}", project_id=project_id, metadata={"repository_id": str(repository_id), "status": status})
+    await event_bus.publish(str(tenant_id), "project_repository_updated", {"repository": row_to_json(updated), "project_id": project_id})
+    return {"repository": row_to_json(updated)}
+
+
+@router.delete("/{project_id}/repositories/{repository_id}")
+async def disable_project_repository(project_id: str, repository_id: str, current_user: dict = Depends(get_current_user)):
+    tenant_id = resolve_tenant_id(current_user)
+    project = ensure_project(project_id, tenant_id)
+    ensure_project_permissions(project, current_user)
+    repository = ensure_project_repository(repository_id, tenant_id, project_id)
+    updated = execute(
+        """
+        UPDATE project_repositories
+        SET status = 'DISABLED',
+            is_default = false,
+            updated_at = now()
+        WHERE id = %s AND tenant_id = %s
+        RETURNING *
+        """,
+        (repository_id, tenant_id),
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    record_activity(tenant_id, current_user["id"], "project_repository_disabled", f"Disabled repository {repository['repo']} for {project['key']}", project_id=project_id, metadata={"repository_id": str(repository_id)})
+    await event_bus.publish(str(tenant_id), "project_repository_disabled", {"repository_id": repository_id, "project_id": project_id})
+    return {"ok": True}
 
 
 @router.get("/{project_id}")

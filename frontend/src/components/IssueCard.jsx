@@ -1,8 +1,12 @@
 import { initials, priorityClass } from '../utils.js';
+import { getBoardWorkflowStatus, getTaskStateBadges } from '../utils/taskWorkflow.js';
 
 export default function IssueCard({ issue, members = [], draggable = false, onDragStart, onClick, onAssign }) {
   const assigneeOptions = members.length ? members : [];
   const assigneeLabel = issue.assignee_name || 'Unassigned';
+  const agentBadges = getTaskStateBadges(issue);
+  const workflowStatus = getBoardWorkflowStatus(issue);
+  const repositoryLabel = (issue.repository_name || issue.github_repo || '').split('/').pop();
   return (
     <article className="issue-card issue-card-compact" draggable={draggable} onDragStart={onDragStart} onClick={onClick}>
       <div className="issue-card-head">
@@ -10,7 +14,7 @@ export default function IssueCard({ issue, members = [], draggable = false, onDr
           <strong>{issue.issue_key}</strong>
           <span className={priorityClass(issue.priority)}>{issue.priority}</span>
         </div>
-        <span className={`status-pill ${String(issue.status || '').toLowerCase()}`}>{String(issue.status || 'TODO').replace('_', ' ')}</span>
+        <span className={`status-pill ${String(workflowStatus || '').toLowerCase()}`}>{String(workflowStatus || 'TODO').replace('_', ' ')}</span>
       </div>
 
       <h4>{issue.title}</h4>
@@ -21,6 +25,8 @@ export default function IssueCard({ issue, members = [], draggable = false, onDr
         {issue.story_points ? <span>{issue.story_points} pts</span> : null}
         {issue.due_date && <span>{issue.due_date}</span>}
         {issue.project_key && <span className="project-badge">{issue.project_key}</span>}
+        {repositoryLabel ? <span className="repo-badge">{repositoryLabel}</span> : null}
+        {agentBadges.map((badge) => <span key={badge.label} className={`issue-badge task-badge ${badge.tone}`}>{badge.label}</span>)}
       </div>
 
       <div className="card-footer">

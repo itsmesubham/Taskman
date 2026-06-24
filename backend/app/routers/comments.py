@@ -4,6 +4,7 @@ from ..database import fetch_all, fetch_one, execute
 from ..security import get_current_user
 from ..utils import row_to_json, rows_to_json
 from ..services.activity import record_activity
+from ..services.agent_workflow import ISSUE_SELECT_COLUMNS
 from ..sse import event_bus
 
 router = APIRouter(prefix="/api/issues/{issue_id}/comments", tags=["comments"])
@@ -15,7 +16,7 @@ class CommentCreate(BaseModel):
 
 def ensure_issue(issue_id: str, tenant_id: str):
     issue = fetch_one(
-        "SELECT id, tenant_id, project_id, sprint_id, issue_key, title, description, issue_type, status, priority, assignee_id, reporter_id, story_points, due_date, labels, position, created_at, updated_at FROM issues WHERE id = %s AND tenant_id = %s",
+        f"SELECT {ISSUE_SELECT_COLUMNS} FROM issues WHERE id = %s AND tenant_id = %s",
         (issue_id, tenant_id),
     )
     if not issue:

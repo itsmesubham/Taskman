@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 from typing import Any
 import bcrypt
 import jwt
@@ -7,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .config import get_settings
 from .database import fetch_all, fetch_one
 from .services.memberships import memberships_for_user
+from .utils import serialize
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -127,3 +130,43 @@ def require_role(*roles: str):
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def hash_agent_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def generate_agent_token() -> str:
+    return f"agent_{secrets.token_urlsafe(32)}"
+
+
+def _extract_agent_token(request: Request) -> str | None:
+    header = request.headers.get("x-agent-token")
+    if header:
+        return header.strip()
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return request.query_params.get("agent_token")
+
+
+def get_current_agent(request: Request) -> dict[str, Any]:
+    token = _extract_agent_token(request)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing agent token")
+    token_hash = hash_agent_token(token)
+    row = fetch_one(
+        """
+        SELECT id, tenant_id, name, token_hash, allowed_repo, scopes, active, created_by, last_used_at, created_at
+        FROM agent_tokens
+        WHERE token_hash = %s
+        """,
+        (token_hash,),
+    )
+    if not row or not row["active"]:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
+    execute = fetch_one(
+        "UPDATE agent_tokens SET last_used_at = now() WHERE id = %s RETURNING id, tenant_id, name, allowed_repo, scopes, active, created_by, last_used_at, created_at",
+        (row["id"],),
+    )
+    return serialize(execute or row)

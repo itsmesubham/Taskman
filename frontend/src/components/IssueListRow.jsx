@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { cx } from '../utils.js';
 import AssigneeAvatar from './AssigneeAvatar.jsx';
 import IssueMetaBadge from './IssueMetaBadge.jsx';
+import { getTaskUrl } from '../utils/taskRoutes.js';
 
 const priorityOptions = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
 
@@ -13,6 +14,7 @@ export default function IssueListRow({
   sprints = [],
   onToggleSelected,
   onOpen,
+  onCopyLink,
   onUpdate,
   onDelete,
 }) {
@@ -40,6 +42,15 @@ export default function IssueListRow({
     event.stopPropagation();
     setMenuOpen(false);
     await onDelete(issue.id);
+  };
+  const handleCopyLink = async (event) => {
+    event.stopPropagation();
+    setMenuOpen(false);
+    if (onCopyLink) {
+      await onCopyLink(issue);
+      return;
+    }
+    await navigator.clipboard.writeText(`${window.location.origin}${getTaskUrl(issue)}`);
   };
 
   return (
@@ -115,6 +126,7 @@ export default function IssueListRow({
               </select>
             </label>
             <div className="issue-row-menu-footer">
+              <button type="button" className="ghost" onClick={handleCopyLink}>Copy link</button>
               <button type="button" className="ghost" onClick={() => onOpen(issue)}>Open detail</button>
               <button type="button" className="danger" onClick={handleDelete}>Delete</button>
             </div>

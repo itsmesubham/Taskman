@@ -38,7 +38,7 @@ export default function TopNav() {
         <div className="topnav-right">
           <div className="global-search">
             <span>⌕</span>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tasks" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tasks, people, PRs" />
           </div>
           <span className={cx('realtime-pill', eventStatus)}>{eventStatus}</span>
           <UserMenu />

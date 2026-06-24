@@ -17,6 +17,7 @@ export default function IssueList({
   onToggleSelected,
   onClearSelection,
   onOpenIssue,
+  onCopyIssueLink,
   onCreateTask,
   onAddSelectedToSprint,
   targetSprintId,
@@ -67,6 +68,7 @@ export default function IssueList({
             sprints={sprints}
             onToggleSelected={onToggleSelected}
             onOpen={onOpenIssue}
+            onCopyLink={onCopyIssueLink}
             onUpdate={onUpdateIssue}
             onDelete={onDeleteIssue}
           />

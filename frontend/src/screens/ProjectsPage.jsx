@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { cx } from '../utils.js';
@@ -10,13 +10,23 @@ const VISIBILITY_LABELS = {
 };
 
 export default function ProjectsPage() {
-  const { session, projects, createProject, updateProject, activeProjectId, setActiveProjectId, sprintSchedule } = useWorkspace();
+  const { session, projects, createProject, updateProject, activeProjectId, setActiveProjectId, sprintSchedule, api, projectRepositories, loadWorkspace, showError, showSuccess } = useWorkspace();
   const [formOpen, setFormOpen] = useState(projects.length === 0);
   const [name, setName] = useState('');
   const [key, setKey] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState('EVERYONE');
+  const [repoName, setRepoName] = useState('');
+  const [defaultBranch, setDefaultBranch] = useState('main');
+  const [branchPrefix, setBranchPrefix] = useState('');
+  const [repoIsDefault, setRepoIsDefault] = useState(false);
+  const [repoDrafts, setRepoDrafts] = useState({});
   const isAdmin = String(session.user?.role || '').toUpperCase() === 'ADMIN';
+  const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0] || null;
+  const activeProjectRepositories = useMemo(
+    () => projectRepositories.filter((repository) => repository.project_id === activeProject?.id),
+    [activeProject?.id, projectRepositories]
+  );
 
   const submit = async (event) => {
     event.preventDefault();
@@ -26,6 +36,55 @@ export default function ProjectsPage() {
     setDescription('');
     setVisibility('EVERYONE');
     setFormOpen(false);
+  };
+
+  const addRepository = async (event) => {
+    event.preventDefault();
+    if (!activeProject) return;
+    try {
+      await api.post(`/projects/${activeProject.id}/repositories`, {
+        repo: repoName.trim(),
+        default_branch: defaultBranch.trim() || 'main',
+        branch_prefix: branchPrefix.trim(),
+        is_default: repoIsDefault
+      });
+      setRepoName('');
+      setDefaultBranch('main');
+      setBranchPrefix('');
+      setRepoIsDefault(false);
+      showSuccess('Repository added');
+      await loadWorkspace(true, true);
+    } catch (error) {
+      showError(error);
+    }
+  };
+
+  const saveRepository = async (repositoryId) => {
+    if (!activeProject) return;
+    const draft = repoDrafts[repositoryId] || {};
+    try {
+      await api.patch(`/projects/${activeProject.id}/repositories/${repositoryId}`, {
+        default_branch: draft.default_branch,
+        branch_prefix: draft.branch_prefix,
+        is_default: draft.is_default
+      });
+      showSuccess('Repository updated');
+      await loadWorkspace(true, true);
+    } catch (error) {
+      showError(error);
+    }
+  };
+
+  const disableRepository = async (repositoryId) => {
+    if (!activeProject) return;
+    if (!window.confirm('Disable this repository for the project?')) return;
+    try {
+      await api.delete(`/projects/${activeProject.id}/repositories/${repositoryId}`);
+      showSuccess('Repository disabled');
+      await loadWorkspace(true, true);
+    } catch (error) {
+      showError(error);
+    }
   };
 
   return (
@@ -115,6 +174,105 @@ export default function ProjectsPage() {
           );
         })}
       </div>
+
+      {activeProject && (
+        <section className="panel">
+          <div className="panel-head wrap">
+            <div>
+              <h3>Repositories</h3>
+              <span>{activeProject.key} · {activeProjectRepositories.length} linked repositories</span>
+            </div>
+            <span>Project scoped</span>
+          </div>
+          <form className="form-grid repo-form" onSubmit={addRepository}>
+            <label>
+              GitHub repo
+              <input value={repoName} onChange={(event) => setRepoName(event.target.value)} placeholder="itsmesubham/Taskman" required />
+            </label>
+            <label>
+              Default branch
+              <input value={defaultBranch} onChange={(event) => setDefaultBranch(event.target.value)} placeholder="main" />
+            </label>
+            <label>
+              Branch prefix
+              <input value={branchPrefix} onChange={(event) => setBranchPrefix(event.target.value)} placeholder="taskman/" />
+            </label>
+            <label className="toggle-row">
+              <input type="checkbox" checked={repoIsDefault} onChange={(event) => setRepoIsDefault(event.target.checked)} />
+              <span>
+                Mark as default
+                <small>New coding tasks will prefer this repo.</small>
+              </span>
+            </label>
+            <div className="form-actions wide">
+              <button type="submit" className="primary">Add repository</button>
+            </div>
+          </form>
+
+          <div className="repo-list">
+            {activeProjectRepositories.map((repository) => {
+              const draft = repoDrafts[repository.id] || {
+                default_branch: repository.default_branch,
+                branch_prefix: repository.branch_prefix,
+                is_default: repository.is_default
+              };
+              return (
+                <article className="repo-row" key={repository.id}>
+                  <div className="repo-row-main">
+                    <strong>{repository.repo}</strong>
+                    <span>{repository.provider}</span>
+                  </div>
+                  <div className="repo-row-grid">
+                    <label>
+                      Default branch
+                      <input
+                        value={draft.default_branch || ''}
+                        onChange={(event) => setRepoDrafts((current) => ({
+                          ...current,
+                          [repository.id]: { ...draft, default_branch: event.target.value }
+                        }))}
+                      />
+                    </label>
+                    <label>
+                      Branch prefix
+                      <input
+                        value={draft.branch_prefix || ''}
+                        onChange={(event) => setRepoDrafts((current) => ({
+                          ...current,
+                          [repository.id]: { ...draft, branch_prefix: event.target.value }
+                        }))}
+                      />
+                    </label>
+                    <label className="toggle-row compact">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(draft.is_default)}
+                        onChange={(event) => setRepoDrafts((current) => ({
+                          ...current,
+                          [repository.id]: { ...draft, is_default: event.target.checked }
+                        }))}
+                      />
+                      <span>
+                        Default
+                        <small>{repository.is_default ? 'Currently default' : 'Select for new coding tasks'}</small>
+                      </span>
+                    </label>
+                  </div>
+                  <div className="repo-row-meta">
+                    <span className="visibility-badge">{repository.status}</span>
+                    <span className="issue-meta-badge muted">{repository.linked_task_count || 0} tasks</span>
+                  </div>
+                  <div className="repo-row-actions">
+                    <button type="button" className="ghost tiny" onClick={() => saveRepository(repository.id)}>Save</button>
+                    <button type="button" className="danger tiny" onClick={() => disableRepository(repository.id)}>Disable</button>
+                  </div>
+                </article>
+              );
+            })}
+            {!activeProjectRepositories.length && <div className="empty-inline">No repositories linked to this project yet.</div>}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

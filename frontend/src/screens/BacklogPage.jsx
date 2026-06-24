@@ -3,9 +3,10 @@ import PageHeader from '../components/PageHeader.jsx';
 import CreateTaskDrawer from '../components/CreateTaskDrawer.jsx';
 import IssueList from '../components/IssueList.jsx';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
+import { getTaskUrl } from '../utils/taskRoutes.js';
 
 export default function BacklogPage() {
-  const { page, issues, backlogIssues, projectSprints, addIssuesToSprint, setSelectedIssue, taskDrawerOpen, taskDrawerDefaultStatus, closeCreateTaskDrawer, openCreateTaskDrawer, updateIssue, deleteIssue, session, members } = useWorkspace();
+  const { page, issues, backlogIssues, projectSprints, addIssuesToSprint, setSelectedIssue, taskDrawerOpen, taskDrawerDefaultStatus, closeCreateTaskDrawer, openCreateTaskDrawer, updateIssue, deleteIssue, session, members, navigate, showSuccess, showError } = useWorkspace();
   const [selected, setSelected] = useState([]);
   const [targetSprint, setTargetSprint] = useState('');
   const [filters, setFilters] = useState({
@@ -77,6 +78,18 @@ export default function BacklogPage() {
   }, [backlogBase, filters, myTasksBase, page, session.user?.id]);
 
   const handleFilterChange = (patch) => setFilters((current) => ({ ...current, ...patch }));
+  const openTask = (issue) => {
+    setSelectedIssue(issue);
+    navigate(getTaskUrl(issue, session.tenant));
+  };
+  const copyTaskLink = async (issue) => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${getTaskUrl(issue, session.tenant)}`);
+      showSuccess('Task link copied');
+    } catch {
+      showError(new Error('Unable to copy task link'));
+    }
+  };
 
   return (
     <div className="page-stack">
@@ -103,7 +116,8 @@ export default function BacklogPage() {
         selectedIds={selected}
         onToggleSelected={toggle}
         onClearSelection={() => setSelected([])}
-        onOpenIssue={setSelectedIssue}
+        onOpenIssue={openTask}
+        onCopyIssueLink={copyTaskLink}
         onCreateTask={() => openCreateTaskDrawer('BACKLOG')}
         onAddSelectedToSprint={addSelected}
         targetSprintId={targetSprint}

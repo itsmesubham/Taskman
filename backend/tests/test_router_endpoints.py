@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import types
 import unittest
@@ -32,10 +33,12 @@ if "psycopg_pool" not in sys.modules:
     sys.modules["psycopg_pool"] = psycopg_pool
 
 from app.routers.comments import CommentCreate, add_comment, list_comments
-from app.routers.issues import IssueCreate, IssueUpdate, create_issue, get_issue, list_issues, reorder_issues, update_issue, update_sprint as apply_sprint, update_status as apply_status
+from app.routers.agent import BlockedRequest, ClaimRequest, PullRequestRequest, github_webhook, claim_task as agent_claim_task, attach_pull_request as agent_attach_pull_request
+from app.routers.issues import IssueCreate, IssueUpdate, create_issue, get_issue, get_issue_by_key, list_issues, reorder_issues, update_issue, update_sprint as apply_sprint, update_status as apply_status
 from app.routers.projects import ProjectCreate, ProjectUpdate, archive_project, create_project, list_projects, update_project
 from app.routers.reports import dashboard, sprint_report
 from app.routers.sprints import CompleteSprintRequest, SprintCreate, SprintUpdate, add_issues_to_sprint, complete_sprint, create_sprint, get_sprint, list_sprints, start_sprint, update_sprint
+from app.routers.workspaces import get_workspace_task
 
 
 async def async_noop(*args, **kwargs):
@@ -61,6 +64,18 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(result["issues"][0]["id"], "issue-1")
         mock_defaults.assert_called_once_with("tenant-1")
         self.assertTrue(mock_fetch_all.called)
+
+    def test_get_issue_by_key_returns_task_in_active_workspace(self):
+        issue = {"id": "issue-1", "issue_key": "GRABBIT-1", "project_id": "project-1", "status": "TODO"}
+        with patch("app.routers.issues.resolve_tenant_id", return_value="tenant-1"), patch("app.routers.issues.ensure_issue_by_key", return_value=issue):
+            result = get_issue_by_key("GRABBIT-1", current_user={"tenant_id": "tenant-1"})
+        self.assertEqual(result["issue"]["issue_key"], "GRABBIT-1")
+
+    def test_get_workspace_task_enforces_slug_membership(self):
+        issue = {"id": "issue-1", "issue_key": "GRABBIT-1", "project_id": "project-1", "status": "TODO"}
+        with patch("app.routers.workspaces.memberships_for_user", return_value=[{"tenant_id": "tenant-1", "tenant_slug": "grabbit"}]), patch("app.routers.workspaces.fetch_one", return_value=issue):
+            result = get_workspace_task("grabbit", "GRABBIT-1", current_user={"id": "user-1"})
+        self.assertEqual(result["issue"]["issue_key"], "GRABBIT-1")
 
     def test_create_issue_uses_default_project_and_monthly_sprint(self):
         fake_issue = {"id": "issue-1", "issue_key": "GRABBIT-1", "title": "Fix bug", "project_id": "project-1"}
@@ -257,6 +272,59 @@ class RouterTests(unittest.TestCase):
         with patch("app.routers.projects.resolve_tenant_id", return_value="tenant-1"), patch("app.routers.projects.fetch_one", return_value={"id": "project-1", "tenant_id": "tenant-1", "name": "Grabbit", "description": "", "status": "ACTIVE", "visibility": "EVERYONE", "created_by": "user-1"}), patch("app.routers.projects.execute", return_value={"id": "project-1", "key": "GRABBIT"}), patch("app.routers.projects.record_activity"), patch("app.routers.projects.event_bus.publish", new=async_noop):
             archived = asyncio.run(archive_project("project-1", current_user={"id": "user-1", "tenant_id": "tenant-1", "role": "OWNER"}))
         self.assertTrue(archived["ok"])
+
+    def test_agent_claim_attach_and_release_workflow_routes(self):
+        issue = {"id": "issue-1", "tenant_id": "tenant-1", "project_id": "project-1", "issue_key": "GRABBIT-9", "ai_pickable": True, "claimed_by_agent": None, "claim_expires_at": None, "status": "TODO", "github_repo": "owner/repo"}
+        claimed_issue = {**issue, "claimed_by_agent": "Codex", "agent_status": "CLAIMED"}
+        claim_row = {"id": "claim-1"}
+        with patch("app.routers.agent.issue_row", return_value=issue), patch("app.routers.agent.claim_task_workflow", return_value=(claimed_issue, claim_row)), patch("app.routers.agent.row_to_json", side_effect=lambda value: value):
+            result = agent_claim_task("issue-1", ClaimRequest(claim_minutes=30), current_agent={"id": "agent-1", "tenant_id": "tenant-1", "name": "Codex", "allowed_repo": "owner/repo"})
+        self.assertEqual(result["task"]["claimed_by_agent"], "Codex")
+        self.assertEqual(result["claim"]["id"], "claim-1")
+
+        attached = {**claimed_issue, "github_pr_url": "https://github.com/owner/repo/pull/42", "github_pr_number": 42, "github_pr_status": "OPEN", "status": "IN_REVIEW"}
+        with patch("app.routers.agent.issue_row", return_value=claimed_issue), patch("app.routers.agent.attach_pull_request_workflow", return_value=attached), patch("app.routers.agent.row_to_json", side_effect=lambda value: value):
+            result = agent_attach_pull_request(
+                "issue-1",
+                PullRequestRequest(
+                    task_id="issue-1",
+                    repo="owner/repo",
+                    branch="ai/grabbit-9-fix",
+                    pr_url="https://github.com/owner/repo/pull/42",
+                    pr_number=42,
+                    summary="Done",
+                    test_notes="Passed",
+                    changed_files=["src/app.py"],
+                ),
+                current_agent={"id": "agent-1", "tenant_id": "tenant-1", "name": "Codex", "allowed_repo": "owner/repo"},
+            )
+        self.assertEqual(result["task"]["github_pr_number"], 42)
+        self.assertEqual(result["task"]["status"], "IN_REVIEW")
+
+    def test_github_webhook_marks_merged_issue_done(self):
+        issue = {"id": "issue-1", "tenant_id": "tenant-1", "project_id": "project-1", "issue_key": "GRABBIT-9"}
+
+        class RequestStub:
+            def __init__(self, headers, body, payload):
+                self.headers = headers
+                self._body = body
+                self._payload = payload
+            async def body(self):
+                return self._body
+            async def json(self):
+                return self._payload
+
+        payload = {
+            "action": "closed",
+            "repository": {"full_name": "owner/repo"},
+            "pull_request": {"number": 42, "html_url": "https://github.com/owner/repo/pull/42", "merged": True},
+        }
+        request = RequestStub({"x-hub-signature-256": "sha256=test", "x-github-event": "pull_request"}, json.dumps(payload).encode("utf-8"), payload)
+
+        with patch("app.routers.agent.verify_github_signature", return_value=True), patch("app.routers.agent.find_issue_by_pr", return_value=issue), patch("app.routers.agent.execute", return_value={**issue, "status": "DONE", "project_id": "project-1"}), patch("app.routers.agent.record_automation_event"), patch("app.routers.agent.record_activity"):
+            result = asyncio.run(github_webhook(request))
+
+        self.assertTrue(result["ok"])
 
     def test_sprint_routes_cover_schedule_and_member_actions(self):
         with patch("app.routers.sprints.resolve_tenant_id", return_value="tenant-1"), patch("app.routers.sprints.fetch_all", return_value=[{"id": "sprint-1"}]):

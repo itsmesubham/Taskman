@@ -3,6 +3,8 @@ import { ApiClient, DEFAULT_API_BASE, isSecureApiBase, normalizeApiBase } from '
 import { extractInviteCode } from '../utils/invite.js';
 import { readJson, saveJson } from '../utils.js';
 import { buildActiveWorkspaceContext } from '../utils/workspaceSession.js';
+import { getBoardWorkflowStatus } from '../utils/taskWorkflow.js';
+import { parseTaskRoute } from '../utils/taskRoutes.js';
 
 const WorkspaceContext = createContext(null);
 
@@ -20,13 +22,14 @@ export function WorkspaceProvider({ children }) {
       memberships: persisted.memberships || []
     };
   });
-  const [page, setPage] = useState('board');
+  const [page, setPageState] = useState('board');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [eventStatus, setEventStatus] = useState('syncing');
 
   const [projects, setProjects] = useState([]);
+  const [projectRepositories, setProjectRepositories] = useState([]);
   const [issues, setIssues] = useState([]);
   const [sprints, setSprints] = useState([]);
   const [members, setMembers] = useState([]);
@@ -38,6 +41,7 @@ export function WorkspaceProvider({ children }) {
   const [query, setQuery] = useState('');
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [comments, setComments] = useState([]);
+  const [agentActivity, setAgentActivity] = useState([]);
   const [draggedIssueId, setDraggedIssueId] = useState(null);
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
   const [taskDrawerDefaultStatus, setTaskDrawerDefaultStatus] = useState('TODO');
@@ -45,6 +49,7 @@ export function WorkspaceProvider({ children }) {
   const [boardQuickFilter, setBoardQuickFilter] = useState('ALL');
   const [memberships, setMemberships] = useState([]);
   const [authStatus, setAuthStatus] = useState(session.token ? 'loading' : 'signed_out');
+  const [route, setRoute] = useState(() => parseTaskRoute(window.location.pathname));
   const [inviteCode, setInviteCode] = useState(() => {
     return extractInviteCode(window.location.pathname);
   });
@@ -55,6 +60,7 @@ export function WorkspaceProvider({ children }) {
   const bootstrappingRef = useRef(false);
   const workspaceLoadRef = useRef(false);
   const workspaceLoadedTenantRef = useRef('');
+  const routeRef = useRef(route);
 
   const updateSession = useCallback((next) => {
     setSession(next);
@@ -85,6 +91,29 @@ export function WorkspaceProvider({ children }) {
     const timer = window.setTimeout(() => setToast(null), 3500);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    routeRef.current = route;
+  }, [route]);
+
+  const setPage = useCallback((nextPage) => {
+    setPageState(nextPage);
+    if (routeRef.current.kind === 'task') {
+      window.history.pushState({}, '', '/');
+      setRoute({ kind: 'app' });
+      setInviteCode('');
+      setSelectedIssue(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    const syncRoute = () => {
+      setRoute(parseTaskRoute(window.location.pathname));
+    };
+    syncRoute();
+    window.addEventListener('popstate', syncRoute);
+    return () => window.removeEventListener('popstate', syncRoute);
+  }, []);
 
   useEffect(() => {
     const syncInviteCode = () => {
@@ -132,6 +161,11 @@ export function WorkspaceProvider({ children }) {
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path);
     setInviteCode(extractInviteCode(path));
+    const nextRoute = parseTaskRoute(path);
+    setRoute(nextRoute);
+    if (nextRoute.kind !== 'task') {
+      setSelectedIssue(null);
+    }
   }, []);
 
   const setActiveTenant = useCallback(async (tenantId, { silent = false, userOverride = null } = {}) => {
@@ -226,10 +260,11 @@ export function WorkspaceProvider({ children }) {
     workspaceLoadedTenantRef.current = tenantId;
     if (!silent) setLoading(true);
     try {
-      const [defaultsRes, scheduleRes, projectRes, sprintRes, issueRes, reportRes] = await Promise.all([
+      const [defaultsRes, scheduleRes, projectRes, repoRes, sprintRes, issueRes, reportRes] = await Promise.all([
         api.get('/workspaces/board'),
         api.get('/sprints/schedule'),
         api.get('/projects'),
+        api.get('/projects/repositories'),
         api.get('/sprints'),
         api.get('/issues'),
         api.get('/reports/dashboard')
@@ -240,6 +275,7 @@ export function WorkspaceProvider({ children }) {
 
       const nextProjects = projectRes.projects || [];
       setProjects(nextProjects);
+      setProjectRepositories(repoRes.repositories || []);
       setSprints(sprintRes.sprints || []);
       setIssues(issueRes.issues || []);
       setDashboard(reportRes || null);
@@ -271,6 +307,15 @@ export function WorkspaceProvider({ children }) {
     }
   }, [api, session.tenant?.id, session.token]);
 
+  const loadIssueByKey = useCallback(async (workspaceSlug, taskKey) => {
+    if (!taskKey) {
+      throw new Error('Task key is required');
+    }
+    const routePrefix = workspaceSlug ? `/workspaces/${encodeURIComponent(workspaceSlug)}/tasks/${encodeURIComponent(taskKey)}` : `/issues/key/${encodeURIComponent(taskKey)}`;
+    const result = await api.get(routePrefix);
+    return result.issue || null;
+  }, [api]);
+
   useEffect(() => {
     if (!session.token || !session.tenant?.id) return;
     loadWorkspace();
@@ -297,11 +342,15 @@ export function WorkspaceProvider({ children }) {
       bootstrappingRef.current = true;
       setBootstrapReady(false);
       try {
+        const pathRoute = parseTaskRoute(window.location.pathname);
         if (session.tenant?.id && Array.isArray(session.memberships) && session.memberships.length > 0) {
+          const preferredTenantId = pathRoute.workspaceSlug
+            ? (session.memberships.find((membership) => membership.tenant_slug === pathRoute.workspaceSlug)?.tenant_id || session.tenant.id)
+            : session.tenant.id;
           const workspace = buildActiveWorkspaceContext({
             user: session.user,
             memberships: session.memberships,
-            preferredTenantId: session.tenant.id
+            preferredTenantId
           });
           setMemberships(workspace.memberships);
           if (workspace.user && (!session.user?.role || !session.user?.active_tenant_id)) {
@@ -341,7 +390,8 @@ export function WorkspaceProvider({ children }) {
           return;
         }
 
-        const preferredTenantId = localStorage.getItem('taskman_active_tenant') || nextUser?.active_tenant_id || '';
+        const preferredMembership = pathRoute.workspaceSlug ? nextMemberships.find((membership) => membership.tenant_slug === pathRoute.workspaceSlug) : null;
+        const preferredTenantId = preferredMembership?.tenant_id || localStorage.getItem('taskman_active_tenant') || nextUser?.active_tenant_id || '';
         const workspace = buildActiveWorkspaceContext({
           user: nextUser || session.user || null,
           memberships: nextMemberships,
@@ -405,6 +455,13 @@ export function WorkspaceProvider({ children }) {
   const selectedBoardSprintId = boardSprintId === 'active' ? activeSprint?.id || '' : boardSprintId;
 
   const projectIssues = issues.filter((issue) => !activeProjectId || issue.project_id === activeProjectId);
+  const githubRepos = useMemo(() => {
+    const repos = new Set();
+    projectRepositories.forEach((repository) => {
+      if (repository.repo) repos.add(repository.repo);
+    });
+    return Array.from(repos).sort();
+  }, [projectRepositories]);
   const visibleIssues = projectIssues.filter((issue) => {
     const search = query.trim().toLowerCase();
     if (!search) return true;
@@ -419,8 +476,11 @@ export function WorkspaceProvider({ children }) {
     const sprintMatch = issue.sprint_id === selectedBoardSprintId;
     if (!sprintMatch) return false;
     if (boardFilter === 'ALL') return true;
-    if (boardFilter === 'REVIEW') return issue.status === 'IN_REVIEW';
-    return issue.status === boardFilter;
+    if (boardFilter === 'REVIEW') {
+      const workflowStatus = getBoardWorkflowStatus(issue);
+      return workflowStatus === 'IN_REVIEW' || issue.status === 'CHANGES_REQUESTED';
+    }
+    return getBoardWorkflowStatus(issue) === boardFilter;
   });
   const filteredBoardIssues = boardIssues.filter((issue) => {
     if (boardQuickFilter === 'ALL') return true;
@@ -436,6 +496,9 @@ export function WorkspaceProvider({ children }) {
       return due >= new Date(today.toDateString()) && due <= weekAhead;
     }
     if (boardQuickFilter === 'BLOCKED') return issue.status === 'BLOCKED';
+    if (boardQuickFilter === 'AI_WORKING') return ['CLAIMED', 'WORKING'].includes(issue.agent_status) || Boolean(issue.claimed_by_agent);
+    if (boardQuickFilter === 'PR_OPEN') return String(issue.github_pr_status || '').toUpperCase() === 'OPEN';
+    if (boardQuickFilter === 'CHANGES_REQUESTED') return issue.status === 'CHANGES_REQUESTED' || String(issue.github_pr_status || '').toUpperCase() === 'CHANGES_REQUESTED';
     return true;
   });
 
@@ -577,9 +640,23 @@ export function WorkspaceProvider({ children }) {
     } catch (error) { showError(error); }
   }, [api, showError]);
 
+  const loadAgentActivity = useCallback(async (issueId) => {
+    try {
+      const result = await api.get(`/issues/${issueId}/agent-activity`);
+      setAgentActivity(result.timeline || []);
+    } catch {
+      setAgentActivity([]);
+    }
+  }, [api]);
+
   useEffect(() => {
-    if (selectedIssue?.id) loadComments(selectedIssue.id);
-  }, [loadComments, selectedIssue?.id]);
+    if (!selectedIssue?.id) {
+      setAgentActivity([]);
+      return;
+    }
+    loadComments(selectedIssue.id);
+    loadAgentActivity(selectedIssue.id);
+  }, [loadAgentActivity, loadComments, selectedIssue?.id]);
 
   const addComment = async (issueId, body) => {
     try {
@@ -596,6 +673,7 @@ export function WorkspaceProvider({ children }) {
     page, setPage, mobileNavOpen, setMobileNavOpen,
     toast, loading, eventStatus,
     projects, issues, sprints, members, dashboard,
+    projectRepositories,
     activeProject, activeProjectId, setActiveProjectId,
     activeSprint, projectSprints, selectedBoardSprintId,
     boardSprintId, setBoardSprintId,
@@ -606,10 +684,12 @@ export function WorkspaceProvider({ children }) {
     query, setQuery,
     backlogIssues, boardIssues, filteredBoardIssues, visibleIssues,
     navigate, setActiveTenant, createWorkspace, acceptInvite,
+    route, loadIssueByKey,
     loadWorkspace, createProject, updateProject, createIssue, updateIssue, deleteIssue, moveIssueStatus,
     createSprint, startSprint, completeSprint, addIssuesToSprint,
-    selectedIssue, setSelectedIssue, comments, addComment,
+    selectedIssue, setSelectedIssue, comments, agentActivity, addComment,
     draggedIssueId, setDraggedIssueId,
+    githubRepos,
     showError, showSuccess, logout
   };
 
