@@ -5,6 +5,8 @@ import QuickFilters from '../components/QuickFilters.jsx';
 import TaskCard from '../components/TaskCard.jsx';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import BoardToolbar from '../layout/BoardToolbar.jsx';
+import { getTaskUrl } from '../utils/taskRoutes.js';
+import { getBoardWorkflowStatus } from '../utils/taskWorkflow.js';
 
 const BOARD_COLUMNS = [
   { key: 'TODO', label: 'Todo', className: 'todo' },
@@ -28,22 +30,40 @@ export default function BoardPage() {
     members,
     updateIssue,
     boardQuickFilter,
-    setBoardQuickFilter
+    setBoardQuickFilter,
+    navigate,
+    showSuccess,
+    showError
   } = useWorkspace();
 
   const columns = BOARD_COLUMNS.map((status) => ({
     ...status,
     helper: {
       TODO: 'Plan new work here',
-      IN_PROGRESS: 'Tasks being worked on',
-      IN_REVIEW: 'Waiting for review',
-      DONE: 'Completed work'
+      IN_PROGRESS: 'Work being done by humans or agents',
+      IN_REVIEW: 'PRs, approvals, and changes requested',
+      DONE: 'Completed and merged work'
     }[status.key],
-    issues: filteredBoardIssues.filter((issue) => (issue.status === 'BLOCKED' ? 'IN_PROGRESS' : issue.status) === status.key)
+    issues: filteredBoardIssues.filter((issue) => {
+      const mapped = getBoardWorkflowStatus(issue);
+      return mapped === status.key;
+    })
   }));
 
   const handleAssign = async (issueId, assigneeId) => {
     await updateIssue(issueId, { assignee_id: assigneeId });
+  };
+  const openTask = (issue) => {
+    setSelectedIssue(issue);
+    navigate(getTaskUrl(issue, session.tenant));
+  };
+  const copyTaskLink = async (issue) => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${getTaskUrl(issue, session.tenant)}`);
+      showSuccess('Task link copied');
+    } catch {
+      showError(new Error('Unable to copy task link'));
+    }
   };
 
   const totalTasks = filteredBoardIssues.length;
@@ -88,7 +108,9 @@ export default function BoardPage() {
                     members={members}
                     draggable
                     onDragStart={() => setDraggedIssueId(issue.id)}
-                    onClick={() => setSelectedIssue(issue)}
+                    onClick={() => openTask(issue)}
+                    onOpenTask={openTask}
+                    onCopyLink={copyTaskLink}
                     onAssign={handleAssign}
                   />
                 ))}

@@ -4,6 +4,7 @@ from ..database import fetch_all, fetch_one, execute, get_conn
 from ..security import get_current_user, require_role
 from ..utils import row_to_json, rows_to_json
 from ..services.activity import record_activity
+from ..services.agent_workflow import ISSUE_SELECT_COLUMNS
 from ..services.workspace_defaults import ensure_workspace_board_defaults, get_workspace_sprint_schedule
 from ..sse import event_bus
 
@@ -125,7 +126,7 @@ def get_sprint(sprint_id: str, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
     sprint = ensure_sprint(sprint_id, tenant_id)
     issues = fetch_all(
-        "SELECT id, tenant_id, project_id, sprint_id, issue_key, title, description, issue_type, status, priority, assignee_id, reporter_id, story_points, due_date, labels, position, created_at, updated_at FROM issues WHERE sprint_id = %s AND tenant_id = %s ORDER BY position ASC",
+        f"SELECT {ISSUE_SELECT_COLUMNS} FROM issues WHERE sprint_id = %s AND tenant_id = %s ORDER BY position ASC",
         (sprint_id, tenant_id),
     )
     return {"sprint": row_to_json(sprint), "issues": rows_to_json(issues)}

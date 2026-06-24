@@ -17,14 +17,19 @@ import { cx } from '../utils.js';
 export default function AppShell() {
   const {
     page,
+    route,
     selectedIssue,
     toast,
     openCreateTaskDrawer,
     setPage,
+    navigate,
     moveIssueStatus,
-    setBoardSprintId
+    setBoardSprintId,
+    loadIssueByKey,
+    setSelectedIssue
   } = useWorkspace();
   const [commandOpen, setCommandOpen] = useState(false);
+  const [taskRouteState, setTaskRouteState] = useState({ loading: false, error: null });
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -43,6 +48,26 @@ export default function AppShell() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [openCreateTaskDrawer]);
+
+  useEffect(() => {
+    if (route?.kind !== 'task') return undefined;
+    let cancelled = false;
+    setTaskRouteState({ loading: true, error: null });
+    setSelectedIssue(null);
+    (async () => {
+      try {
+        const issue = await loadIssueByKey(route.workspaceSlug, route.taskKey);
+        if (cancelled) return;
+        setSelectedIssue(issue);
+        setTaskRouteState({ loading: false, error: null });
+      } catch (error) {
+        if (!cancelled) setTaskRouteState({ loading: false, error });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadIssueByKey, route?.kind, route?.taskKey, route?.workspaceSlug, setSelectedIssue]);
 
   const handleCommand = (commandId) => {
     switch (commandId) {
@@ -104,19 +129,44 @@ export default function AppShell() {
       <main className="main-area">
         <div className="content-wrap">
           <WorkspaceGate>
-            {page === 'dashboard' && <Dashboard />}
-            {page === 'projects' && <ProjectsPage />}
-            {(page === 'backlog' || page === 'my-tasks') && <BacklogPage />}
-            {page === 'board' && <BoardPage />}
-            {page === 'sprints' && <SprintsPage />}
-            {page === 'reports' && <ReportsPage />}
-            {page === 'ai' && <AiPage />}
-            {page === 'settings' && <SettingsPage />}
+            {route?.kind === 'task' ? (
+              taskRouteState.loading ? (
+                <section className="panel task-route-loading">
+                  <div className="empty-state compact">
+                    <h4>Loading task</h4>
+                    <p>Fetching the canonical task page.</p>
+                  </div>
+                </section>
+              ) : taskRouteState.error ? (
+                <section className="panel task-route-error">
+                  <div className="empty-state compact">
+                    <h4>{String(taskRouteState.error?.message || '').toLowerCase().includes('access') ? 'No access to this task' : 'Task not found'}</h4>
+                    <p>{String(taskRouteState.error?.message || '').toLowerCase().includes('access')
+                      ? 'You do not have access to this workspace or task.'
+                      : 'The task key could not be resolved in this workspace.'}</p>
+                    <button type="button" className="primary" onClick={() => { navigate('/'); setPage('board'); }}>Go to board</button>
+                  </div>
+                </section>
+              ) : (
+                <TaskDetailDrawer mode="page" />
+              )
+            ) : (
+              <>
+                {page === 'dashboard' && <Dashboard />}
+                {page === 'projects' && <ProjectsPage />}
+                {(page === 'backlog' || page === 'my-tasks') && <BacklogPage />}
+                {page === 'board' && <BoardPage />}
+                {page === 'sprints' && <SprintsPage />}
+                {page === 'reports' && <ReportsPage />}
+                {page === 'ai' && <AiPage />}
+                {page === 'settings' && <SettingsPage />}
+              </>
+            )}
           </WorkspaceGate>
         </div>
       </main>
       <CommandMenu open={commandOpen} onClose={() => setCommandOpen(false)} onAction={handleCommand} selectedIssue={selectedIssue} />
-      {selectedIssue && <TaskDetailDrawer />}
+      {selectedIssue && route?.kind !== 'task' && <TaskDetailDrawer />}
       {toast && <div className={cx('toast', toast.type)}>{toast.text}</div>}
     </div>
   );

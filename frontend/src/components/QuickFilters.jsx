@@ -4,7 +4,10 @@ const QUICK_FILTERS = [
   { key: 'UNASSIGNED', label: 'Unassigned' },
   { key: 'HIGH', label: 'High' },
   { key: 'DUE_WEEK', label: 'This week' },
-  { key: 'BLOCKED', label: 'Blocked' }
+  { key: 'BLOCKED', label: 'Blocked' },
+  { key: 'AI_WORKING', label: 'AI working' },
+  { key: 'PR_OPEN', label: 'PR open' },
+  { key: 'CHANGES_REQUESTED', label: 'Changes requested' }
 ];
 
 export default function QuickFilters({ value, onChange }) {
@@ -14,7 +17,7 @@ export default function QuickFilters({ value, onChange }) {
         <button
           key={filter.key}
           type="button"
-          className={value === filter.key ? 'chip active' : 'chip'}
+          className={`chip ${value === filter.key ? 'active' : ''} chip-${filter.key.toLowerCase().replace(/_/g, '-')}`}
           onClick={() => onChange(filter.key)}
         >
           {filter.label}

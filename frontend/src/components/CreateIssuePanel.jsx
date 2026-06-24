@@ -28,7 +28,7 @@ export default function CreateIssuePanel({
   defaultStatus = 'TODO',
   onCreated
 }) {
-  const { activeSprint, projectSprints, projects, members, createIssue, sprintSchedule } = useWorkspace();
+  const { activeSprint, projectSprints, projects, projectRepositories, members, createIssue, sprintSchedule } = useWorkspace();
   const isOpen = Boolean(open);
   const [moreOpen, setMoreOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -42,12 +42,18 @@ export default function CreateIssuePanel({
   const [projectId, setProjectId] = useState('');
   const [storyPoints, setStoryPoints] = useState('');
   const [labels, setLabels] = useState('');
+  const [aiPickable, setAiPickable] = useState(false);
+  const [repositoryId, setRepositoryId] = useState('');
+  const [githubBranch, setGithubBranch] = useState('');
   const titleRef = useRef(null);
 
   useEffect(() => {
     if (isOpen) {
       setStatus(normalizeStatus(defaultStatus));
       setProjectId('');
+      setAiPickable(false);
+      setRepositoryId('');
+      setGithubBranch('');
       window.requestAnimationFrame(() => titleRef.current?.focus());
     }
   }, [defaultStatus, isOpen]);
@@ -85,6 +91,31 @@ export default function CreateIssuePanel({
     return projectSprints.filter((sprint) => sprint.project_id === projectId && sprint.status !== 'COMPLETED');
   }, [projectId, projectSprints]);
 
+  const projectRepoOptions = useMemo(() => {
+    if (!projectId) return [];
+    return projectRepositories.filter((repository) => repository.project_id === projectId && repository.status === 'ACTIVE');
+  }, [projectId, projectRepositories]);
+
+  const selectedRepository = useMemo(
+    () => projectRepoOptions.find((repository) => repository.id === repositoryId) || null,
+    [projectRepoOptions, repositoryId]
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!projectId) {
+      setRepositoryId('');
+      return;
+    }
+    if (selectedRepository && selectedRepository.project_id === projectId) return;
+    const defaultRepository = projectRepoOptions.find((repository) => repository.is_default) || projectRepoOptions[0] || null;
+    if (defaultRepository && (aiPickable || projectRepoOptions.length === 1)) {
+      setRepositoryId(defaultRepository.id);
+    } else if (!aiPickable) {
+      setRepositoryId('');
+    }
+  }, [aiPickable, isOpen, projectId, projectRepoOptions, repositoryId, selectedRepository]);
+
   const hasUnsavedChanges = Boolean(
     title.trim() ||
     assigneeQuery.trim() ||
@@ -94,6 +125,9 @@ export default function CreateIssuePanel({
     projectId ||
     storyPoints ||
     labels.trim() ||
+    aiPickable ||
+    repositoryId ||
+    githubBranch.trim() ||
     moreOpen ||
     priority !== 'MEDIUM' ||
     status !== normalizeStatus(defaultStatus)
@@ -118,8 +152,18 @@ export default function CreateIssuePanel({
     setProjectId('');
     setStoryPoints('');
     setLabels('');
+    setAiPickable(false);
+    setRepositoryId('');
+    setGithubBranch('');
     setMoreOpen(false);
   };
+
+  const branchPreview = useMemo(() => {
+    const projectKey = projectOptions.find((project) => project.id === projectId)?.key || 'PROJ';
+    const repoPrefix = selectedRepository?.branch_prefix || 'ai/';
+    const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'task';
+    return githubBranch.trim() || `${repoPrefix}${projectKey.toLowerCase()}/${slug}`;
+  }, [githubBranch, projectId, projectOptions, selectedRepository?.branch_prefix, title]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -136,7 +180,11 @@ export default function CreateIssuePanel({
         due_date: dueDate || null,
         sprint_id: sprintId || null,
         story_points: Number(storyPoints) || 0,
-        labels: labels.split(',').map((item) => item.trim()).filter(Boolean)
+        labels: labels.split(',').map((item) => item.trim()).filter(Boolean),
+        ai_pickable: aiPickable,
+        repository_id: repositoryId || null,
+        github_repo: selectedRepository?.repo || null,
+        github_branch: githubBranch.trim() || null
       });
       if (result) {
         onCreated?.(result);
@@ -200,6 +248,14 @@ export default function CreateIssuePanel({
             </select>
           </label>
 
+          <label className="toggle-row">
+            <input type="checkbox" checked={aiPickable} onChange={(event) => setAiPickable(event.target.checked)} />
+            <span>
+              AI-pickable
+              <small>Allow a coding agent to claim this task through the agent workflow.</small>
+            </span>
+          </label>
+
           <div className="form-actions drawer-actions">
             <button type="button" className="ghost" onClick={() => setMoreOpen((current) => !current)}>
               {moreOpen ? 'Hide details' : 'More details'}
@@ -222,6 +278,22 @@ export default function CreateIssuePanel({
                   <option value="">{activeSprint && (!projectId || activeSprint.project_id === projectId) ? `Current sprint: ${activeSprint.name}` : 'Auto monthly sprint'}</option>
                   {sprintOptions.map((sprint) => <option key={sprint.id} value={sprint.id}>{sprint.name} · {sprint.status}</option>)}
                 </select>
+              </label>
+              <label>
+                Repository
+                <select value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)}>
+                  <option value="">No repository</option>
+                  {projectRepoOptions.map((repository) => (
+                    <option key={repository.id} value={repository.id}>
+                      {repository.repo} · {repository.provider}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Branch
+                <input value={githubBranch} onChange={(event) => setGithubBranch(event.target.value)} placeholder="ai/taskman-123-fix-login" />
+                <small className="field-help">Preview: {branchPreview}</small>
               </label>
               <label>
                 Due date

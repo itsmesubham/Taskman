@@ -4,6 +4,7 @@ import { EmptyInline } from '../components/EmptyState.jsx';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { formatDate } from '../utils.js';
 import SprintScheduleCard from '../components/SprintScheduleCard.jsx';
+import { getTaskUrl } from '../utils/taskRoutes.js';
 
 function SprintSection({ id, title, items, emptyText, action }) {
   return (
@@ -35,7 +36,7 @@ function SprintSection({ id, title, items, emptyText, action }) {
 }
 
 export default function SprintsPage() {
-  const { activeProject, projectSprints, backlogIssues, createSprint, startSprint, completeSprint, addIssuesToSprint, setSelectedIssue, sprintSchedule } = useWorkspace();
+  const { activeProject, projectSprints, backlogIssues, createSprint, startSprint, completeSprint, addIssuesToSprint, setSelectedIssue, sprintSchedule, session, navigate } = useWorkspace();
   const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -57,6 +58,10 @@ export default function SprintsPage() {
   const active = useMemo(() => projectSprints.filter((sprint) => sprint.status === 'ACTIVE'), [projectSprints]);
   const upcoming = useMemo(() => projectSprints.filter((sprint) => sprint.status === 'PLANNED'), [projectSprints]);
   const completed = useMemo(() => projectSprints.filter((sprint) => sprint.status === 'COMPLETED'), [projectSprints]);
+  const openTask = (issue) => {
+    setSelectedIssue(issue);
+    navigate(getTaskUrl(issue, session.tenant));
+  };
 
   return (
     <div className="page-stack">
@@ -106,7 +111,7 @@ export default function SprintsPage() {
         <div className="issue-list compact">
           {backlogIssues.slice(0, 20).map((issue) => <div className="issue-row" key={issue.id}>
             <input type="checkbox" checked={selectedBacklog.includes(issue.id)} onChange={() => setSelectedBacklog((current) => current.includes(issue.id) ? current.filter((id) => id !== issue.id) : [...current, issue.id])} />
-            <button className="issue-row-main" onClick={() => setSelectedIssue(issue)}><strong>{issue.issue_key}</strong><span>{issue.title}</span></button>
+            <button className="issue-row-main" onClick={() => openTask(issue)}><strong>{issue.issue_key}</strong><span>{issue.title}</span></button>
             <span className="points">{issue.story_points || 0} pts</span>
           </div>)}
         </div>
