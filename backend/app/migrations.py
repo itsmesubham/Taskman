@@ -7,7 +7,6 @@ def init_schema() -> None:
     sql = schema_path.read_text()
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql)
             cur.execute(
                 """
                 ALTER TABLE IF EXISTS issues
@@ -30,6 +29,7 @@ def init_schema() -> None:
                 "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS agent_blocker_reason TEXT DEFAULT ''",
             ]:
                 cur.execute(statement)
+            cur.execute(sql)
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS project_repositories (

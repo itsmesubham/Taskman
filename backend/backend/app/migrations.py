@@ -7,13 +7,29 @@ def init_schema() -> None:
     sql = schema_path.read_text()
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql)
             cur.execute(
                 """
                 ALTER TABLE IF EXISTS issues
                 ALTER COLUMN position TYPE BIGINT
                 """
             )
+            for statement in [
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS ai_pickable BOOLEAN NOT NULL DEFAULT false",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS agent_status TEXT NOT NULL DEFAULT 'AVAILABLE'",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS claimed_by_agent TEXT",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS repository_id UUID",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS github_repo TEXT",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS github_branch TEXT",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS github_pr_url TEXT",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS github_pr_number INTEGER",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS github_pr_status TEXT",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS agent_summary TEXT DEFAULT ''",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS agent_test_notes TEXT DEFAULT ''",
+                "ALTER TABLE IF EXISTS issues ADD COLUMN IF NOT EXISTS agent_blocker_reason TEXT DEFAULT ''",
+            ]:
+                cur.execute(statement)
+            cur.execute(sql)
             cur.execute(
                 """
                 ALTER TABLE IF EXISTS projects
