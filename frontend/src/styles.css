@@ -1385,6 +1385,14 @@ input:-webkit-autofill:focus {
 .issue-row-content { min-width: 0; border: 0; background: transparent; display: grid; gap: 4px; text-align: left; padding: 0; color: var(--text-primary); }
 .issue-row-keyline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .issue-row-key { color: var(--brand); font-size: 12px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.issue-key-link { border: 0; background: transparent; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer; }
+.issue-row-key.issue-key-link { color: var(--brand); }
+.issue-card-key .issue-key-link { color: var(--text-faint); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.issue-card-key .issue-key-link:hover, .issue-card-key .issue-key-link:focus-visible,
+.issue-row-key.issue-key-link:hover, .issue-row-key.issue-key-link:focus-visible {
+  color: var(--brand);
+  outline: none;
+}
 .issue-row-dot { color: var(--text-faint); font-size: 12px; }
 .issue-row-status-copy { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); }
 .issue-row-status-copy.todo, .issue-row-status-copy.backlog { color: var(--text-muted); }

@@ -14,3 +14,10 @@ export function extractInviteCode(value) {
   if (directMatch) return decodeURIComponent(directMatch[1]);
   return raw.replace(/^\/+/, '');
 }
+
+export function extractInviteCodeFromPath(pathname = '') {
+  const raw = String(pathname || '').trim();
+  if (!raw) return '';
+  const directMatch = raw.match(/^(?:\/+)?(?:invite|join)\/([^/?#]+)/i);
+  return directMatch ? decodeURIComponent(directMatch[1]) : '';
+}

@@ -104,7 +104,7 @@ export default function BacklogPage() {
       <IssueList
         mode={page === 'my-tasks' ? 'my-tasks' : 'backlog'}
         title={page === 'my-tasks' ? 'My Tasks' : 'Backlog'}
-        description={page === 'my-tasks'
+      description={page === 'my-tasks'
           ? 'Track work assigned to you or created by you in a compact issue list.'
           : 'Capture work that is not yet on the board, then pull it into a sprint when ready.'}
         items={filteredIssues}

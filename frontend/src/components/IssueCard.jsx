@@ -7,11 +7,14 @@ export default function IssueCard({ issue, members = [], draggable = false, onDr
   const agentBadges = getTaskStateBadges(issue);
   const workflowStatus = getBoardWorkflowStatus(issue);
   const repositoryLabel = (issue.repository_name || issue.github_repo || '').split('/').pop();
+  const openTask = () => onClick?.(issue);
   return (
     <article className="issue-card issue-card-compact" draggable={draggable} onDragStart={onDragStart} onClick={onClick}>
       <div className="issue-card-head">
         <div className="issue-card-key">
-          <strong>{issue.issue_key}</strong>
+          <button type="button" className="issue-key-link" onClick={(event) => { event.stopPropagation(); openTask(); }} aria-label={`Open ${issue.issue_key}`}>
+            <strong>{issue.issue_key}</strong>
+          </button>
           <span className={priorityClass(issue.priority)}>{issue.priority}</span>
         </div>
         <span className={`status-pill ${String(workflowStatus || '').toLowerCase()}`}>{String(workflowStatus || 'TODO').replace('_', ' ')}</span>

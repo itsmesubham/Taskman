@@ -10,12 +10,21 @@ export default function TaskCard({ issue, members = [], draggable = false, onDra
   const agentBadges = getTaskStateBadges(issue);
   const workflowStatus = getBoardWorkflowStatus(issue);
   const repositoryLabel = (issue.repository_name || issue.github_repo || '').split('/').pop();
+  const openTask = () => {
+    if (onOpenTask) {
+      onOpenTask(issue);
+      return;
+    }
+    onClick?.(issue);
+  };
 
   return (
     <article className="issue-card issue-card-compact" draggable={draggable} onDragStart={onDragStart} onClick={onClick}>
       <div className="issue-card-head">
         <div className="issue-card-key">
-          <strong>{issue.issue_key}</strong>
+          <button type="button" className="issue-key-link" onClick={(event) => { event.stopPropagation(); openTask(); }} aria-label={`Open ${issue.issue_key}`}>
+            <strong>{issue.issue_key}</strong>
+          </button>
           <PriorityBadge priority={issue.priority} />
         </div>
         <StatusPill status={workflowStatus} />

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiClient, DEFAULT_API_BASE, isSecureApiBase, normalizeApiBase } from '../api/client.js';
-import { extractInviteCode } from '../utils/invite.js';
+import { extractInviteCodeFromPath } from '../utils/invite.js';
 import { readJson, saveJson } from '../utils.js';
 import { buildActiveWorkspaceContext } from '../utils/workspaceSession.js';
 import { getBoardWorkflowStatus } from '../utils/taskWorkflow.js';
@@ -51,7 +51,7 @@ export function WorkspaceProvider({ children }) {
   const [authStatus, setAuthStatus] = useState(session.token ? 'loading' : 'signed_out');
   const [route, setRoute] = useState(() => parseTaskRoute(window.location.pathname));
   const [inviteCode, setInviteCode] = useState(() => {
-    return extractInviteCode(window.location.pathname);
+    return extractInviteCodeFromPath(window.location.pathname);
   });
   const [inviteDetails, setInviteDetails] = useState(null);
   const [inviteError, setInviteError] = useState('');
@@ -117,7 +117,7 @@ export function WorkspaceProvider({ children }) {
 
   useEffect(() => {
     const syncInviteCode = () => {
-      setInviteCode(extractInviteCode(window.location.pathname));
+      setInviteCode(extractInviteCodeFromPath(window.location.pathname));
     };
     syncInviteCode();
     window.addEventListener('popstate', syncInviteCode);
@@ -160,7 +160,7 @@ export function WorkspaceProvider({ children }) {
 
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path);
-    setInviteCode(extractInviteCode(path));
+    setInviteCode(extractInviteCodeFromPath(path));
     const nextRoute = parseTaskRoute(path);
     setRoute(nextRoute);
     if (nextRoute.kind !== 'task') {

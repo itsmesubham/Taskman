@@ -111,7 +111,10 @@ export default function SprintsPage() {
         <div className="issue-list compact">
           {backlogIssues.slice(0, 20).map((issue) => <div className="issue-row" key={issue.id}>
             <input type="checkbox" checked={selectedBacklog.includes(issue.id)} onChange={() => setSelectedBacklog((current) => current.includes(issue.id) ? current.filter((id) => id !== issue.id) : [...current, issue.id])} />
-            <button className="issue-row-main" onClick={() => openTask(issue)}><strong>{issue.issue_key}</strong><span>{issue.title}</span></button>
+            <button className="issue-row-main" onClick={() => openTask(issue)}>
+              <strong className="issue-key-link">{issue.issue_key}</strong>
+              <span>{issue.title}</span>
+            </button>
             <span className="points">{issue.story_points || 0} pts</span>
           </div>)}
         </div>

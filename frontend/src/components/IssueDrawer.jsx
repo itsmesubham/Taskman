@@ -151,7 +151,13 @@ export default function IssueDrawer({ mode = 'drawer' }) {
     <>
       <div className="drawer-head">
         <div>
-          <span className="issue-key-big">{selectedIssue.issue_key}</span>
+          {mode !== 'page' ? (
+            <button type="button" className="issue-key-big issue-key-link" onClick={openFullPage} aria-label={`Open ${selectedIssue.issue_key} in full page`}>
+              {selectedIssue.issue_key}
+            </button>
+          ) : (
+            <span className="issue-key-big">{selectedIssue.issue_key}</span>
+          )}
           <h2>{selectedIssue.title}</h2>
           <p className="drawer-summary">
             <span>{selectedIssue.project_key}</span>

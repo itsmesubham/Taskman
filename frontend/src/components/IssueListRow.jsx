@@ -74,15 +74,22 @@ export default function IssueListRow({
         </button>
       ) : null}
 
-      <button type="button" className="issue-row-content" onClick={handleRowOpen}>
+      <div className="issue-row-content" onClick={handleRowOpen} role="button" tabIndex={0} onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          handleRowOpen();
+        }
+      }}>
         <div className="issue-row-keyline">
-          <span className="issue-row-key">{issue.issue_key}</span>
+          <button type="button" className="issue-row-key issue-key-link" onClick={(event) => { event.stopPropagation(); handleRowOpen(); }} aria-label={`Open ${issue.issue_key}`}>
+            {issue.issue_key}
+          </button>
           <span className="issue-row-dot">•</span>
           <span className={cx('issue-row-status-copy', String(issue.status || '').toLowerCase())}>{issue.status?.replaceAll('_', ' ') || 'BACKLOG'}</span>
         </div>
         <strong className="issue-row-title">{issue.title}</strong>
         {issue.description ? <span className="issue-row-desc">{issue.description}</span> : null}
-      </button>
+      </div>
 
       <div className="issue-row-meta-stack">
         <IssueMetaBadge type="priority" value={issue.priority} />
