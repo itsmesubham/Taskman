@@ -51,7 +51,7 @@ export function buildAuthSessionFromResult(result, apiBase) {
 
   return {
     apiBase,
-    token: result?.cookie_auth ? null : (result?.access_token || null),
+    token: result?.access_token || null,
     user: workspace.user,
     tenant: workspace.tenant,
     memberships
@@ -70,7 +70,7 @@ export function buildInviteAcceptedSession(baseSession, inviteResult) {
 
   return {
     ...(baseSession || {}),
-    token: inviteResult?.cookie_auth ? null : (inviteResult?.access_token || baseSession?.token || null),
+    token: inviteResult?.access_token || baseSession?.token || null,
     user: {
       ...((baseSession && baseSession.user) || {}),
       role: inviteResult?.membership?.role || baseSession?.user?.role || 'MEMBER',

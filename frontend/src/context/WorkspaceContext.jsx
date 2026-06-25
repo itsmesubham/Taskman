@@ -182,7 +182,7 @@ export function WorkspaceProvider({ children }) {
     };
     const nextSession = {
       ...session,
-      token: result.cookie_auth ? null : (result.access_token || session.token),
+      token: result.access_token || session.token,
       user: nextUser,
       tenant: nextTenant,
       memberships: result.memberships || memberships,
@@ -207,7 +207,7 @@ export function WorkspaceProvider({ children }) {
     localStorage.setItem('taskman_active_tenant', nextTenant?.id || '');
     updateSession({
       ...session,
-      token: result.cookie_auth ? null : (result.access_token || session.token),
+      token: result.access_token || session.token,
       user: nextUser,
       tenant: nextTenant,
       memberships: result.memberships || (result.membership ? [result.membership] : memberships),
@@ -229,7 +229,7 @@ export function WorkspaceProvider({ children }) {
     localStorage.setItem('taskman_active_tenant', nextTenant?.id || '');
     updateSession({
       ...session,
-      token: result.cookie_auth ? null : (result.access_token || session.token),
+      token: result.access_token || session.token,
       user: nextUser,
       tenant: nextTenant,
       memberships: result.memberships || memberships,
