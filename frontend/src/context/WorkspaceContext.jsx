@@ -42,6 +42,7 @@ export function WorkspaceProvider({ children }) {
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [comments, setComments] = useState([]);
   const [agentActivity, setAgentActivity] = useState([]);
+  const [issueActivity, setIssueActivity] = useState([]);
   const [draggedIssueId, setDraggedIssueId] = useState(null);
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
   const [taskDrawerDefaultStatus, setTaskDrawerDefaultStatus] = useState('TODO');
@@ -566,12 +567,12 @@ export function WorkspaceProvider({ children }) {
     } catch (error) { showError(error); }
   };
 
-  const updateIssue = async (issueId, payload) => {
+  const updateIssue = async (issueId, payload, { silent = false } = {}) => {
     try {
       const result = await api.patch(`/issues/${issueId}`, payload);
       setIssues((current) => current.map((issue) => issue.id === issueId ? { ...issue, ...result.issue } : issue));
       setSelectedIssue((current) => current?.id === issueId ? { ...current, ...result.issue } : current);
-      showSuccess('Issue updated');
+      if (!silent) showSuccess('Issue updated');
       await loadWorkspace(true, true);
     } catch (error) { showError(error); }
   };
@@ -649,6 +650,15 @@ export function WorkspaceProvider({ children }) {
     }
   }, [api]);
 
+  const loadIssueActivity = useCallback(async (issueId) => {
+    try {
+      const result = await api.get(`/issues/${issueId}/activity`);
+      setIssueActivity(result.activity || []);
+    } catch {
+      setIssueActivity([]);
+    }
+  }, [api]);
+
   useEffect(() => {
     if (!selectedIssue?.id) {
       setAgentActivity([]);
@@ -656,7 +666,8 @@ export function WorkspaceProvider({ children }) {
     }
     loadComments(selectedIssue.id);
     loadAgentActivity(selectedIssue.id);
-  }, [loadAgentActivity, loadComments, selectedIssue?.id]);
+    loadIssueActivity(selectedIssue.id);
+  }, [loadAgentActivity, loadComments, loadIssueActivity, selectedIssue?.id]);
 
   const addComment = async (issueId, body) => {
     try {
@@ -687,7 +698,7 @@ export function WorkspaceProvider({ children }) {
     route, loadIssueByKey,
     loadWorkspace, createProject, updateProject, createIssue, updateIssue, deleteIssue, moveIssueStatus,
     createSprint, startSprint, completeSprint, addIssuesToSprint,
-    selectedIssue, setSelectedIssue, comments, agentActivity, addComment,
+    selectedIssue, setSelectedIssue, comments, agentActivity, issueActivity, addComment,
     draggedIssueId, setDraggedIssueId,
     githubRepos,
     showError, showSuccess, logout

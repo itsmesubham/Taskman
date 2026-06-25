@@ -59,6 +59,12 @@ async def add_comment(issue_id: str, payload: CommentCreate, current_user: dict 
         """,
         (tenant_id, issue_id, current_user["id"], payload.body.strip()),
     )
-    record_activity(tenant_id, current_user["id"], "comment_created", f"Commented on {issue['issue_key']}", project_id=issue["project_id"], issue_id=issue_id, metadata={"comment_id": str(comment["id"])})
-    await event_bus.publish(tenant_id, "comment_created", {"issue_id": issue_id, "comment": row_to_json(comment)})
+    try:
+        record_activity(tenant_id, current_user["id"], "comment_created", f"Commented on {issue['issue_key']}", project_id=issue["project_id"], issue_id=issue_id, metadata={"comment_id": str(comment["id"])})
+    except Exception:
+        pass
+    try:
+        await event_bus.publish(tenant_id, "comment_created", {"issue_id": issue_id, "comment": row_to_json(comment)})
+    except Exception:
+        pass
     return {"comment": row_to_json(comment)}

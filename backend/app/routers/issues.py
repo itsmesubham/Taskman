@@ -6,6 +6,7 @@ from ..security import get_current_user
 from ..utils import row_to_json, rows_to_json
 from ..services.activity import record_activity
 from ..services.agent_workflow import ISSUE_SELECT_COLUMNS, ensure_safe_repo, project_repository_row
+from ..services.issue_lookup import fetch_issue_by_id, fetch_issue_by_key
 from ..services.workspace_defaults import ensure_workspace_board_defaults, ensure_default_project, ensure_current_monthly_sprint
 from ..sse import event_bus
 
@@ -107,29 +108,14 @@ def ensure_project(project_id: str, tenant_id: str):
 
 
 def ensure_issue(issue_id: str, tenant_id: str):
-    issue = fetch_one(
-        f"SELECT {ISSUE_SELECT_COLUMNS} FROM issues WHERE id = %s AND tenant_id = %s",
-        (issue_id, tenant_id),
-    )
+    issue = fetch_issue_by_id(issue_id, tenant_id, with_related=False)
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
     return issue
 
 
 def ensure_issue_by_key(issue_key: str, tenant_id: str):
-    issue = fetch_one(
-        f"""
-        SELECT {ISSUE_SELECT_COLUMNS},
-               p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
-        FROM issues i
-        JOIN projects p ON p.id = i.project_id
-        LEFT JOIN users au ON au.id = i.assignee_id
-        LEFT JOIN users ru ON ru.id = i.reporter_id
-        LEFT JOIN sprints s ON s.id = i.sprint_id
-        WHERE i.issue_key = %s AND i.tenant_id = %s
-        """,
-        (issue_key, tenant_id),
-    )
+    issue = fetch_issue_by_key(issue_key, tenant_id)
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
     return issue
@@ -352,19 +338,7 @@ async def reorder_issues(payload: ReorderRequest, current_user: dict = Depends(g
 @router.get("/{issue_id}")
 def get_issue(issue_id: str, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
-    issue = fetch_one(
-        f"""
-        SELECT {ISSUE_SELECT_COLUMNS},
-               p.key AS project_key, au.name AS assignee_name, ru.name AS reporter_name, s.name AS sprint_name
-        FROM issues i
-        JOIN projects p ON p.id = i.project_id
-        LEFT JOIN users au ON au.id = i.assignee_id
-        LEFT JOIN users ru ON ru.id = i.reporter_id
-        LEFT JOIN sprints s ON s.id = i.sprint_id
-        WHERE i.id = %s AND i.tenant_id = %s
-        """,
-        (issue_id, tenant_id),
-    )
+    issue = fetch_issue_by_id(issue_id, tenant_id)
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
     return {"issue": row_to_json(issue)}
@@ -381,25 +355,55 @@ def get_issue_by_key(issue_key: str, current_user: dict = Depends(get_current_us
 def get_issue_agent_activity(issue_id: str, current_user: dict = Depends(get_current_user)):
     tenant_id = resolve_tenant_id(current_user)
     ensure_issue(issue_id, tenant_id)
-    timeline = fetch_all(
-        """
-        SELECT *
-        FROM automation_events
-        WHERE tenant_id = %s AND issue_id = %s
-        ORDER BY created_at ASC
-        """,
-        (tenant_id, issue_id),
-    )
-    links = fetch_all(
-        """
-        SELECT *
-        FROM external_links
-        WHERE tenant_id = %s AND issue_id = %s
-        ORDER BY created_at DESC
-        """,
-        (tenant_id, issue_id),
-    )
+    try:
+        timeline = fetch_all(
+            """
+            SELECT *
+            FROM automation_events
+            WHERE tenant_id = %s AND issue_id = %s
+            ORDER BY created_at ASC
+            """,
+            (tenant_id, issue_id),
+        )
+        links = fetch_all(
+            """
+            SELECT *
+            FROM external_links
+            WHERE tenant_id = %s AND issue_id = %s
+            ORDER BY created_at DESC
+            """,
+            (tenant_id, issue_id),
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "does not exist" not in message:
+            raise
+        timeline = []
+        links = []
     return {"timeline": rows_to_json(timeline), "external_links": rows_to_json(links)}
+
+
+@router.get("/{issue_id}/activity")
+def get_issue_activity(issue_id: str, current_user: dict = Depends(get_current_user)):
+    tenant_id = resolve_tenant_id(current_user)
+    ensure_issue(issue_id, tenant_id)
+    try:
+        rows = fetch_all(
+            """
+            SELECT ae.*, u.name AS actor_name, u.email AS actor_email
+            FROM activity_events ae
+            LEFT JOIN users u ON u.id = ae.actor_id
+            WHERE ae.tenant_id = %s AND ae.issue_id = %s
+            ORDER BY ae.created_at ASC
+            """,
+            (tenant_id, issue_id),
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "does not exist" not in message:
+            raise
+        rows = []
+    return {"activity": rows_to_json(rows)}
 
 
 @router.patch("/{issue_id}")

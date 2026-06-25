@@ -4,6 +4,7 @@ import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { formatDate } from '../utils.js';
 import { getTaskUrl } from '../utils/taskRoutes.js';
 import { getBoardWorkflowStatus, getTaskStateBadges } from '../utils/taskWorkflow.js';
+import TaskDetailPage from './TaskDetailPage.jsx';
 
 const BOARD_STATUSES = STATUSES.map((status) => status.key);
 const DRAWER_STATUSES = [...BOARD_STATUSES, 'BLOCKED'];
@@ -86,7 +87,7 @@ export default function IssueDrawer({ mode = 'drawer' }) {
     }
   };
 
-  if (!selectedIssue || !draft) return null;
+  if (mode !== 'page' && (!selectedIssue || !draft)) return null;
 
   const save = async () => {
     await updateIssue(selectedIssue.id, {
@@ -429,9 +430,7 @@ export default function IssueDrawer({ mode = 'drawer' }) {
       </>
   );
 
-  if (mode === 'page') {
-    return <article className="task-detail-page">{content}</article>;
-  }
+  if (mode === 'page') return <TaskDetailPage />;
 
   return (
     <div className="drawer-backdrop" onMouseDown={() => setSelectedIssue(null)}>
