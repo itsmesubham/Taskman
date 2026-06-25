@@ -71,6 +71,7 @@ export default function SettingsPage() {
     githubIntegration,
     githubRepositories,
     api,
+    loading,
     showError,
     showSuccess,
     loadWorkspace,
@@ -138,6 +139,9 @@ export default function SettingsPage() {
     if (tab === 'github' || tab === 'integrations' || githubFlag) {
       setActiveSection('integrations');
     }
+    if ((tab === 'github' || tab === 'integrations' || githubFlag) && session.tenant?.id) {
+      loadWorkspace(true, true);
+    }
     if (githubFlag === 'connected') {
       showSuccess('GitHub connected');
     } else if (githubFlag === 'callback') {
@@ -152,7 +156,7 @@ export default function SettingsPage() {
       nextUrl.searchParams.delete('message');
       window.history.replaceState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
     }
-  }, [showError, showSuccess]);
+  }, [loadWorkspace, session.tenant?.id, showError, showSuccess]);
 
   useEffect(() => {
     let cancelled = false;
@@ -588,7 +592,12 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {!githubIntegration?.connected ? (
+        {loading && !githubIntegration ? (
+          <div className="empty-state compact settings-integration-empty">
+            <h4>Checking GitHub connection</h4>
+            <p>Refreshing connected repositories and installation status.</p>
+          </div>
+        ) : !githubIntegration?.connected ? (
           <div className="empty-state compact settings-integration-empty">
             <h4>Connect GitHub</h4>
             <p>Install the Taskman GitHub App to sync repositories, attach pull requests, and update task status automatically.</p>

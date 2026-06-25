@@ -7,38 +7,53 @@ export default function IssueCard({ issue, members = [], draggable = false, onDr
   const agentBadges = getTaskStateBadges(issue);
   const workflowStatus = getBoardWorkflowStatus(issue);
   const repositoryLabel = (issue.repository_name || issue.github_repo || '').split('/').pop();
+  const priorityLabel = String(issue.priority || 'MEDIUM').toLowerCase();
+  const metaParts = [
+    issue.story_points ? `${issue.story_points} pt${issue.story_points === 1 ? '' : 's'}` : null,
+    issue.sprint_name || null,
+    issue.due_date || null
+  ].filter(Boolean);
   const openTask = () => onClick?.(issue);
+
   return (
-    <article className="issue-card issue-card-compact" draggable={draggable} onDragStart={onDragStart} onClick={onClick}>
+    <article
+      className={`issue-card issue-card-compact ${workflowStatus === 'DONE' ? 'issue-card-done' : ''}`}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onClick={onClick}
+    >
       <div className="issue-card-head">
-        <div className="issue-card-key">
-          <button type="button" className="issue-key-link" onClick={(event) => { event.stopPropagation(); openTask(); }} aria-label={`Open ${issue.issue_key}`}>
-            <strong>{issue.issue_key}</strong>
-          </button>
-          <span className={priorityClass(issue.priority)}>{issue.priority}</span>
+        <button type="button" className="issue-card-key" onClick={(event) => { event.stopPropagation(); openTask(); }} aria-label={`Open ${issue.issue_key}`}>
+          <strong>{issue.issue_key}</strong>
+        </button>
+        <div className="issue-card-head-side">
+          <span className={`card-priority card-priority-${priorityLabel}`}>
+            <span className="card-priority-dot" aria-hidden="true" />
+            <span>{String(issue.priority || 'Medium').replace('_', ' ')}</span>
+          </span>
         </div>
-        <span className={`status-pill ${String(workflowStatus || '').toLowerCase()}`}>{String(workflowStatus || 'TODO').replace('_', ' ')}</span>
       </div>
 
-      <h4>{issue.title}</h4>
-
-      {issue.description && <p className="issue-card-desc">{issue.description}</p>}
-
-      <div className="card-meta">
-        {issue.story_points ? <span>{issue.story_points} pts</span> : null}
-        {issue.due_date && <span>{issue.due_date}</span>}
-        {issue.project_key && <span className="project-badge">{issue.project_key}</span>}
-        {repositoryLabel ? <span className="repo-badge">{repositoryLabel}</span> : null}
-        {agentBadges.map((badge) => <span key={badge.label} className={`issue-badge task-badge ${badge.tone}`}>{badge.label}</span>)}
+      <div className="issue-card-body">
+        <h4>{issue.title}</h4>
+        {issue.description ? <p className="issue-card-desc">{issue.description}</p> : null}
       </div>
+
+      {metaParts.length ? <p className="card-meta-line">{metaParts.join(' · ')}</p> : null}
+
+      {(repositoryLabel || agentBadges.length) ? (
+        <div className="card-meta">
+          {repositoryLabel ? <span className="repo-badge">{repositoryLabel}</span> : null}
+          {agentBadges.map((badge) => <span key={badge.label} className={`issue-badge task-badge ${badge.tone}`}>{badge.label}</span>)}
+        </div>
+      ) : null}
 
       <div className="card-footer">
         <div className="card-assignee-copy">
           <span>{initials(assigneeLabel)}</span>
-          <div>
+          <button type="button" className="issue-key-link" onClick={(event) => { event.stopPropagation(); openTask(); }} aria-label={`Open ${issue.issue_key}`}>
             <strong>{assigneeLabel}</strong>
-            <small>{issue.assignee_name ? 'Assigned' : 'Unassigned'}</small>
-          </div>
+          </button>
         </div>
         <label className="card-assignee">
           <select
