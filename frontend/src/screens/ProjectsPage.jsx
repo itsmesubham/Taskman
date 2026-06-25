@@ -85,10 +85,13 @@ export default function ProjectsPage() {
     sprintSchedule,
     api,
     projectRepositories,
+    githubIntegration,
+    githubRepositories,
     issues,
     loadWorkspace,
     showError,
     showSuccess,
+    connectGithub,
   } = useWorkspace();
 
   const [projectModalOpen, setProjectModalOpen] = useState(projects.length === 0);
@@ -99,6 +102,7 @@ export default function ProjectsPage() {
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState('EVERYONE');
   const [repoName, setRepoName] = useState('');
+  const [selectedGithubRepositoryId, setSelectedGithubRepositoryId] = useState('');
   const [defaultBranch, setDefaultBranch] = useState('main');
   const [branchPrefix, setBranchPrefix] = useState('');
   const [repoIsDefault, setRepoIsDefault] = useState(false);
@@ -115,6 +119,11 @@ export default function ProjectsPage() {
   const activeProjectRepositories = useMemo(
     () => projectRepositories.filter((repository) => repository.project_id === activeProject?.id),
     [activeProject?.id, projectRepositories]
+  );
+  const syncedGithubRepos = useMemo(() => githubRepositories || [], [githubRepositories]);
+  const selectedGithubRepository = useMemo(
+    () => syncedGithubRepos.find((repository) => String(repository.id) === String(selectedGithubRepositoryId)) || syncedGithubRepos[0] || null,
+    [selectedGithubRepositoryId, syncedGithubRepos]
   );
   const activeProjectTaskCount = useMemo(
     () => issues.filter((issue) => issue.project_id === activeProject?.id).length,
@@ -152,20 +161,40 @@ export default function ProjectsPage() {
     setDefaultBranch('main');
     setBranchPrefix('');
     setRepoIsDefault(activeProjectRepositories.length === 0);
+    setSelectedGithubRepositoryId(githubIntegration?.connected ? String(syncedGithubRepos[0]?.id || '') : '');
   };
+
+  useEffect(() => {
+    if (!repoModalOpen) return;
+    if (selectedGithubRepository) {
+      setRepoName(selectedGithubRepository.full_name || `${selectedGithubRepository.owner}/${selectedGithubRepository.repo}`);
+      setDefaultBranch(selectedGithubRepository.default_branch || 'main');
+    }
+  }, [repoModalOpen, selectedGithubRepository]);
 
   const addRepository = async (event) => {
     event.preventDefault();
     if (!activeProject) return;
     try {
-      await api.post(`/projects/${activeProject.id}/repositories`, {
+      const repositoryPayload = selectedGithubRepository ? {
+        github_repository_id: selectedGithubRepository.id,
+        repo: selectedGithubRepository.full_name || `${selectedGithubRepository.owner}/${selectedGithubRepository.repo}`,
+        default_branch: defaultBranch.trim() || selectedGithubRepository.default_branch || 'main',
+        branch_prefix: branchPrefix.trim(),
+        is_default: repoIsDefault,
+      } : {
         repo: repoName.trim(),
         default_branch: defaultBranch.trim() || 'main',
         branch_prefix: branchPrefix.trim(),
         is_default: repoIsDefault,
+      };
+      await api.post(`/projects/${activeProject.id}/repositories`, {
+        provider: 'github',
+        ...repositoryPayload,
       });
       setRepoModalOpen(false);
       setRepoName('');
+      setSelectedGithubRepositoryId('');
       setDefaultBranch('main');
       setBranchPrefix('');
       setRepoIsDefault(false);
@@ -254,13 +283,39 @@ export default function ProjectsPage() {
             <h3>{activeProject ? `Repositories for ${activeProject.key}` : 'Repositories'}</h3>
             <span>Link GitHub repositories to this project so tasks, PRs, and agents stay scoped correctly.</span>
           </div>
-          <button type="button" className="primary" onClick={openAddRepository} disabled={!activeProject}>
-            Add repository
-          </button>
+          {githubIntegration?.connected ? (
+            <button type="button" className="primary" onClick={openAddRepository} disabled={!activeProject}>
+              Add repository
+            </button>
+          ) : (
+            <button type="button" className="primary" onClick={async () => {
+              try {
+                await connectGithub();
+              } catch (error) {
+                showError(error);
+              }
+            }}>
+              Connect GitHub
+            </button>
+          )}
         </div>
         <p className="projects-scope-copy">
           Repositories are scoped to the selected project. Agents can only claim tasks from repositories they are allowed to access.
         </p>
+
+        {!githubIntegration?.connected ? (
+          <div className="empty-inline compact">
+            <h4>Connect GitHub to link repositories</h4>
+            <p>Install the Taskman GitHub App to sync repositories and keep project scope clean.</p>
+            <button type="button" className="ghost tiny" onClick={async () => {
+              try {
+                await connectGithub();
+              } catch (error) {
+                showError(error);
+              }
+            }}>Connect GitHub</button>
+          </div>
+        ) : null}
 
         {!activeProject ? (
           <div className="empty-inline">Select a project to manage repositories.</div>
@@ -404,10 +459,23 @@ export default function ProjectsPage() {
           action={<button type="submit" form="repository-create-form" className="primary">Add repository</button>}
         >
           <form id="repository-create-form" className="form-grid" onSubmit={addRepository}>
-            <label>
-              GitHub repository
-              <input value={repoName} onChange={(event) => setRepoName(event.target.value)} placeholder="itsmesubham/Taskman" required />
-            </label>
+            {syncedGithubRepos.length ? (
+              <label>
+                GitHub repository
+                <select value={selectedGithubRepositoryId || ''} onChange={(event) => setSelectedGithubRepositoryId(String(event.target.value || ''))}>
+                  {syncedGithubRepos.map((repository) => (
+                    <option key={repository.id} value={repository.id}>
+                      {repository.full_name || `${repository.owner}/${repository.repo}`} · {repository.default_branch || 'main'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label>
+                GitHub repository
+                <input value={repoName} onChange={(event) => setRepoName(event.target.value)} placeholder="itsmesubham/Taskman" required />
+              </label>
+            )}
             <label>
               Default branch
               <input value={defaultBranch} onChange={(event) => setDefaultBranch(event.target.value)} placeholder="main" />
@@ -423,6 +491,7 @@ export default function ProjectsPage() {
                 <small>New coding tasks in this project will prefer this repository.</small>
               </span>
             </label>
+            <div className="muted">Repositories are scoped to the selected project. Agents can only claim tasks from repositories they are allowed to access.</div>
           </form>
         </Modal>
       )}

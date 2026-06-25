@@ -10,6 +10,11 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 from ..database import execute, fetch_all, fetch_one, get_conn
 from ..config import get_settings
+from ..services.github import (
+    fetch_pull_request,
+    github_repository_by_full_name,
+    parse_github_pr_url,
+)
 from ..utils import row_to_json, rows_to_json, serialize
 
 ISSUE_SELECT_COLUMNS = """
@@ -567,15 +572,34 @@ def attach_pull_request(
     repo_value = ensure_safe_repo(repo)
     if not repo_value:
         raise HTTPException(status_code=400, detail="Repo is required")
+    owner, repo_name, parsed_pr_number = parse_github_pr_url(pr_url)
+    parsed_repo_value = f"{owner}/{repo_name}"
+    if repo_value != parsed_repo_value:
+        raise HTTPException(status_code=400, detail="Pull request repo does not match the selected repository")
+    if pr_number is not None and int(pr_number) != parsed_pr_number:
+        raise HTTPException(status_code=400, detail="PR number does not match the pull request URL")
+    pr_number_value = extract_pr_number(pr_url, pr_number)
+    if pr_number_value is None:
+        raise HTTPException(status_code=400, detail="PR number is required")
     if not issue_repo_access_ok({**issue, "github_repo": repo_value}, agent):
         raise HTTPException(status_code=403, detail="Repository is not allowed for this task or agent")
     resolved_repo = resolve_issue_repository(issue, tenant_id, issue["project_id"], github_repo=repo_value)
     if issue.get("repository_id") and resolved_repo and str(resolved_repo["id"]) != str(issue["repository_id"]):
         raise HTTPException(status_code=400, detail="Pull request repo does not match task repo")
     pr_url_value = sanitize_pr_url(pr_url)
-    pr_number_value = extract_pr_number(pr_url_value, pr_number)
-    if pr_number_value is None:
-        raise HTTPException(status_code=400, detail="PR number is required")
+    github_repo_row = github_repository_by_full_name(tenant_id, repo_value)
+    github_pr_data = {}
+    if github_repo_row and github_repo_row.get("installation_id"):
+        try:
+            github_pr_data = fetch_pull_request(owner, repo_name, pr_number_value, github_repo_row["installation_id"]) or {}
+        except Exception:
+            github_pr_data = {}
+    branch_value = branch.strip()
+    if not branch_value and github_pr_data:
+        branch_value = (github_pr_data.get("head") or {}).get("ref") or ""
+    pr_state = str(github_pr_data.get("state") or "OPEN").upper()
+    if github_pr_data.get("merged_at"):
+        pr_state = "MERGED"
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -585,7 +609,7 @@ def attach_pull_request(
                     github_branch = %s,
                     github_pr_url = %s,
                     github_pr_number = %s,
-                    github_pr_status = 'OPEN',
+                    github_pr_status = %s,
                     agent_summary = %s,
                     agent_test_notes = %s,
                     agent_status = 'SUBMITTED',
@@ -597,9 +621,10 @@ def attach_pull_request(
                 """,
                 (
                     repo_value,
-                    branch.strip(),
+                    branch_value,
                     pr_url_value,
                     pr_number_value,
+                    pr_state,
                     summary.strip(),
                     test_notes.strip(),
                     str(resolved_repo["id"]) if resolved_repo else None,
@@ -629,7 +654,16 @@ def attach_pull_request(
                 "pull_request",
                 pr_url_value,
                 title=f"PR #{pr_number_value}",
-                metadata={"repo": repo_value, "branch": branch, "summary": summary, "test_notes": test_notes, "changed_files": changed_files, "pr_number": pr_number_value},
+                metadata={
+                    "repo": repo_value,
+                    "branch": branch_value,
+                    "summary": summary,
+                    "test_notes": test_notes,
+                    "changed_files": changed_files,
+                    "pr_number": pr_number_value,
+                    "github_repository_id": str(github_repo_row["id"]) if github_repo_row else None,
+                    "github_pr": github_pr_data or None,
+                },
             )
     record_automation_event(
         tenant_id,

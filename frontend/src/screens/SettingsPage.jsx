@@ -15,6 +15,7 @@ const SHORTCUTS = [
 
 const SETTINGS_TABS = [
   { key: 'general', label: 'General' },
+  { key: 'integrations', label: 'Integrations' },
   { key: 'members', label: 'Members' },
   { key: 'invites', label: 'Invites' },
   { key: 'agents', label: 'Agents' },
@@ -67,13 +68,18 @@ export default function SettingsPage() {
     memberships,
     projects,
     projectRepositories,
+    githubIntegration,
+    githubRepositories,
     api,
     showError,
     showSuccess,
     loadWorkspace,
     setActiveTenant,
     createWorkspace,
-    acceptInvite
+    acceptInvite,
+    connectGithub,
+    syncGithubRepositories,
+    disconnectGithub,
   } = useWorkspace();
   const { themePreference, resolvedTheme, setThemePreference } = useTheme();
 
@@ -124,6 +130,29 @@ export default function SettingsPage() {
     { key: 'light', label: 'Light', helper: 'Bright workspace' },
     { key: 'dark', label: 'Dark', helper: 'Low-light workspace' }
   ];
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    const githubFlag = params.get('github');
+    if (tab === 'github' || tab === 'integrations' || githubFlag) {
+      setActiveSection('integrations');
+    }
+    if (githubFlag === 'connected') {
+      showSuccess('GitHub connected');
+    } else if (githubFlag === 'callback') {
+      showSuccess('GitHub setup returned');
+    } else if (githubFlag === 'error') {
+      showError(new Error(params.get('message') || 'GitHub connection failed. Try again.'));
+    }
+    if (tab || githubFlag) {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete('tab');
+      nextUrl.searchParams.delete('github');
+      nextUrl.searchParams.delete('message');
+      window.history.replaceState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+    }
+  }, [showError, showSuccess]);
 
   useEffect(() => {
     let cancelled = false;
@@ -247,6 +276,38 @@ export default function SettingsPage() {
     } catch (error) {
       showError(error);
     }
+  };
+
+  const handleConnectGithub = async () => {
+    try {
+      await connectGithub();
+    } catch (error) {
+      showError(error);
+    }
+  };
+
+  const handleSyncGithub = async () => {
+    try {
+      await syncGithubRepositories();
+      showSuccess('Repositories synced');
+    } catch (error) {
+      showError(error);
+    }
+  };
+
+  const handleDisconnectGithub = async () => {
+    if (!window.confirm('Disconnect GitHub from this workspace?')) return;
+    try {
+      await disconnectGithub();
+      showSuccess('GitHub disconnected');
+    } catch (error) {
+      showError(error);
+    }
+  };
+
+  const openGithubManage = () => {
+    const manageUrl = githubIntegration?.manage_url || 'https://github.com/apps/taskman-ai/installations/new';
+    window.open(manageUrl, '_blank', 'noopener,noreferrer');
   };
 
   const joinWorkspace = async (event) => {
@@ -511,6 +572,117 @@ export default function SettingsPage() {
     </article>
   );
 
+  const renderIntegrationsSection = () => {
+    const canManageGithub = Boolean(githubIntegration?.can_manage ?? (isAdmin || isOwner));
+    const connectedAccount = githubIntegration?.installation?.account_login || githubIntegration?.installation?.account?.login || 'GitHub account';
+    const linkedProjectRepoCount = githubIntegration?.linked_project_repositories_count || 0;
+    const installedRepoCount = githubRepositories.length;
+    const lastSyncedAt = githubIntegration?.installation?.last_synced_at || githubIntegration?.installation?.updated_at || null;
+
+    return (
+      <article className="settings-card">
+        <div className="section-header">
+          <div>
+            <h3>GitHub</h3>
+            <p>Connect GitHub so Taskman can sync repositories, track pull requests, and update work automatically.</p>
+          </div>
+        </div>
+
+        {!githubIntegration?.connected ? (
+          <div className="empty-state compact settings-integration-empty">
+            <h4>Connect GitHub</h4>
+            <p>Install the Taskman GitHub App to sync repositories, attach pull requests, and update task status automatically.</p>
+            {canManageGithub ? (
+              <button type="button" className="primary" onClick={handleConnectGithub}>Connect GitHub</button>
+            ) : (
+              <span className="muted">You need workspace admin permission to connect GitHub.</span>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="settings-integration-summary">
+              <div className="settings-integration-copy">
+                <span className="status-pill success">GitHub connected</span>
+                <h4>Taskman is connected to {connectedAccount}.</h4>
+                <p>Repositories are synced and can be linked to projects.</p>
+              </div>
+              <div className="settings-integration-actions">
+                <button type="button" className="ghost" onClick={openGithubManage}>Manage installation</button>
+                <button type="button" className="ghost" onClick={handleSyncGithub}>Sync repositories</button>
+                <button type="button" className="danger" onClick={handleDisconnectGithub} disabled={!canManageGithub}>Disconnect</button>
+              </div>
+            </div>
+
+            <div className="settings-row-grid github-summary-grid">
+              <div className="settings-row form-row">
+                <span>Installation status</span>
+                <strong>{githubIntegration.installation?.status || 'CONNECTED'}</strong>
+              </div>
+              <div className="settings-row form-row">
+                <span>Installed repositories</span>
+                <strong>{installedRepoCount}</strong>
+              </div>
+              <div className="settings-row form-row">
+                <span>Linked project repositories</span>
+                <strong>{linkedProjectRepoCount}</strong>
+              </div>
+              <div className="settings-row form-row">
+                <span>Last synced</span>
+                <strong>{lastSyncedAt ? new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(lastSyncedAt)) : 'Just now'}</strong>
+              </div>
+            </div>
+
+            <div className="settings-form-section compact">
+              <div className="settings-form-section-head">
+                <div>
+                  <h3>Repositories</h3>
+                  <p>Link GitHub repositories to this workspace so projects can reference them.</p>
+                </div>
+              </div>
+              {githubRepositories.length ? (
+                <div className="github-repo-table">
+                  <div className="github-repo-table-head">
+                    <span>Repository</span>
+                    <span>Visibility</span>
+                    <span>Default branch</span>
+                    <span>Linked projects</span>
+                    <span>Status</span>
+                    <span>Last synced</span>
+                  </div>
+                  {githubRepositories.map((repository) => (
+                    <div className="github-repo-row" key={repository.id}>
+                      <div className="github-repo-main">
+                        <strong>{repository.full_name || `${repository.owner}/${repository.repo}`}</strong>
+                        <span>{repository.provider}</span>
+                      </div>
+                      <span>{repository.visibility || 'private'}</span>
+                      <span>{repository.default_branch || 'main'}</span>
+                      <span>{repository.linked_projects || 0}</span>
+                      <span>
+                        <span className={repository.status === 'ACTIVE' ? 'visibility-badge' : 'default-badge'}>
+                          {repository.status === 'ACTIVE' ? 'Enabled' : 'Disabled'}
+                        </span>
+                      </span>
+                      <span>{repository.last_synced_at ? new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(repository.last_synced_at)) : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-inline compact">
+                  <h4>No repositories linked yet.</h4>
+                  <p>GitHub repositories will appear here after the first sync.</p>
+                  {canManageGithub ? (
+                    <button type="button" className="ghost tiny" onClick={handleSyncGithub}>Sync repositories</button>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </article>
+    );
+  };
+
   const renderAgentsSection = () => (
     <article className="settings-card">
       <div className="section-header">
@@ -586,6 +758,8 @@ export default function SettingsPage() {
 
   const renderSection = () => {
     switch (activeSection) {
+      case 'integrations':
+        return renderIntegrationsSection();
       case 'members':
         return renderMembersSection();
       case 'invites':

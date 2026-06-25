@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .database import init_pool, close_pool
 from .migrations import init_schema
-from .routers import auth, tenants, users, invites, projects, issues, sprints, comments, reports, ai, events, workspaces
+from .routers import auth, tenants, users, invites, projects, issues, sprints, comments, reports, ai, events, workspaces, integrations
 from .routers.agent import router as agent_router, webhook_router as github_webhook_router
 
 settings = get_settings()
@@ -65,4 +65,5 @@ app.include_router(reports.router)
 app.include_router(ai.router)
 app.include_router(events.router)
 app.include_router(agent_router)
+app.include_router(integrations.router)
 app.include_router(github_webhook_router)

@@ -4,6 +4,7 @@ from ..database import fetch_all, fetch_one, execute, get_conn
 from ..security import get_current_user, require_role
 from ..utils import row_to_json, rows_to_json, project_key
 from ..services.activity import record_activity
+from ..services.github import github_repository_by_id
 from ..sse import event_bus
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -25,7 +26,8 @@ class ProjectUpdate(BaseModel):
 
 class ProjectRepositoryCreate(BaseModel):
     provider: str = Field(default="github", pattern="^github$")
-    repo: str = Field(min_length=1, max_length=200)
+    repo: str | None = Field(default=None, max_length=200)
+    github_repository_id: str | None = None
     default_branch: str = Field(default="main", max_length=120)
     branch_prefix: str = Field(default="", max_length=120)
     is_default: bool = False
@@ -69,9 +71,11 @@ def ensure_project_repository(project_repository_id: str, tenant_id: str, projec
     repository = fetch_one(
         f"""
         SELECT pr.id, pr.tenant_id, pr.project_id, pr.provider, pr.repo, pr.default_branch, pr.branch_prefix, pr.is_default, pr.status, pr.created_by, pr.created_at, pr.updated_at,
+               pr.github_repository_id, gr.full_name AS github_full_name, gr.visibility AS github_visibility, gr.default_branch AS github_default_branch,
                p.key AS project_key, p.name AS project_name
         FROM project_repositories pr
         JOIN projects p ON p.id = pr.project_id
+        LEFT JOIN github_repositories gr ON gr.id = pr.github_repository_id
         WHERE {' AND '.join(where)}
         """,
         tuple(params),
@@ -102,10 +106,12 @@ def list_project_repositories(current_user: dict = Depends(get_current_user), pr
     rows = fetch_all(
         f"""
         SELECT pr.id, pr.tenant_id, pr.project_id, pr.provider, pr.repo, pr.default_branch, pr.branch_prefix, pr.is_default, pr.status, pr.created_by, pr.created_at, pr.updated_at,
+               pr.github_repository_id, gr.full_name AS github_full_name, gr.visibility AS github_visibility, gr.default_branch AS github_default_branch,
                p.key AS project_key, p.name AS project_name,
                COALESCE(task_counts.task_count, 0) AS linked_task_count
         FROM project_repositories pr
         JOIN projects p ON p.id = pr.project_id
+        LEFT JOIN github_repositories gr ON gr.id = pr.github_repository_id
         LEFT JOIN (
             SELECT repository_id, COUNT(*)::int AS task_count
             FROM issues
@@ -158,8 +164,18 @@ async def create_project_repository(project_id: str, payload: ProjectRepositoryC
     tenant_id = resolve_tenant_id(current_user)
     project = ensure_project(project_id, tenant_id)
     ensure_project_permissions(project, current_user)
-    repo = payload.repo.strip()
-    if "/" not in repo:
+    github_repo = None
+    repo = payload.repo.strip() if payload.repo else ""
+    if payload.github_repository_id:
+        github_repo = github_repository_by_id(tenant_id, payload.github_repository_id)
+        if not github_repo:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        if str(github_repo["tenant_id"]) != tenant_id:
+            raise HTTPException(status_code=403, detail="Repository is outside this workspace")
+        if github_repo.get("status") != "ACTIVE":
+            raise HTTPException(status_code=400, detail="GitHub repository is disabled")
+        repo = github_repo["full_name"]
+    if not repo or "/" not in repo:
         raise HTTPException(status_code=400, detail="GitHub repo must use owner/name format")
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -167,18 +183,29 @@ async def create_project_repository(project_id: str, payload: ProjectRepositoryC
                 cur.execute("UPDATE project_repositories SET is_default = false, updated_at = now() WHERE tenant_id = %s AND project_id = %s", (tenant_id, project_id))
             cur.execute(
                 """
-                INSERT INTO project_repositories (tenant_id, project_id, provider, repo, default_branch, branch_prefix, is_default, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO project_repositories (tenant_id, project_id, provider, repo, default_branch, branch_prefix, is_default, created_by, github_repository_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (tenant_id, project_id, provider, repo)
                 DO UPDATE SET
                     default_branch = EXCLUDED.default_branch,
                     branch_prefix = EXCLUDED.branch_prefix,
                     is_default = CASE WHEN EXCLUDED.is_default THEN true ELSE project_repositories.is_default END,
                     status = 'ACTIVE',
+                    github_repository_id = COALESCE(EXCLUDED.github_repository_id, project_repositories.github_repository_id),
                     updated_at = now()
                 RETURNING *
                 """,
-                (tenant_id, project_id, payload.provider, repo, payload.default_branch.strip() or "main", payload.branch_prefix.strip(), payload.is_default, current_user["id"]),
+                (
+                    tenant_id,
+                    project_id,
+                    payload.provider,
+                    repo,
+                    (payload.default_branch.strip() if payload.default_branch else "") or (github_repo["default_branch"] if github_repo else "main"),
+                    payload.branch_prefix.strip(),
+                    payload.is_default,
+                    current_user["id"],
+                    payload.github_repository_id,
+                ),
             )
             repository = cur.fetchone()
             if payload.is_default:

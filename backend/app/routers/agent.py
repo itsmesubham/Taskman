@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -30,9 +31,16 @@ from ..services.agent_workflow import (
     set_task_blocked,
     submit_work_for_review as submit_work_for_review_workflow,
     update_task_status as update_task_status_workflow,
-    verify_github_signature,
+)
+from ..services.github import (
+    disconnect_github_installation,
+    get_github_installation_by_installation_id,
+    sync_installation_repositories,
+    verify_webhook_signature,
 )
 from ..utils import row_to_json, rows_to_json, serialize
+
+verify_github_signature = verify_webhook_signature
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 webhook_router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
@@ -516,14 +524,51 @@ def mark_task_blocked(task_id: str, payload: BlockedRequest, current_agent: dict
 async def github_webhook(request: Request):
     body = await request.body()
     signature = request.headers.get("x-hub-signature-256")
-    if not verify_github_signature(get_settings().github_webhook_secret, body, signature):
+    if not verify_github_signature(body, signature):
         raise HTTPException(status_code=401, detail="Invalid GitHub signature")
 
-    payload = await request.json()
+    payload = json.loads(body.decode("utf-8") or "{}")
     event = request.headers.get("x-github-event", "")
+    delivery_id = request.headers.get("x-github-delivery")
+    if delivery_id:
+        try:
+            inserted = execute(
+                """
+                INSERT INTO github_webhook_deliveries (delivery_id, event_type, payload)
+                VALUES (%s, %s, %s::jsonb)
+                ON CONFLICT (delivery_id) DO NOTHING
+                RETURNING id
+                """,
+                (delivery_id, event, json.dumps(serialize(payload))),
+            )
+            if not inserted:
+                return {"ok": True, "duplicate": True}
+        except Exception:
+            pass
     action = payload.get("action")
     repository = payload.get("repository") or {}
     repo_full_name = ensure_safe_repo(repository.get("full_name"))
+    installation = payload.get("installation") or {}
+    installation_id = installation.get("id") or payload.get("installation_id")
+
+    if event in {"installation", "installation_repositories"}:
+        mapped_installation = get_github_installation_by_installation_id(installation_id) if installation_id else None
+        if not mapped_installation:
+            return {"ok": True, "ignored": True}
+        tenant_id = str(mapped_installation["tenant_id"])
+        if action in {"deleted", "suspend"}:
+            disconnect_github_installation(tenant_id)
+            record_activity(tenant_id, None, "github_webhook", "GitHub installation disconnected", metadata={"event": event, "action": action, "installation_id": installation_id})
+            return {"ok": True}
+        try:
+            sync_installation_repositories(tenant_id, int(installation_id))
+        except HTTPException as exc:
+            raise exc
+        except Exception:
+            raise HTTPException(status_code=502, detail="Repository sync failed. Try syncing again.")
+        record_activity(tenant_id, None, "github_webhook", "GitHub repositories synced", metadata={"event": event, "action": action, "installation_id": installation_id})
+        return {"ok": True}
+
     if not repo_full_name:
         return {"ok": True, "ignored": True}
 

@@ -30,6 +30,8 @@ export function WorkspaceProvider({ children }) {
 
   const [projects, setProjects] = useState([]);
   const [projectRepositories, setProjectRepositories] = useState([]);
+  const [githubIntegration, setGithubIntegration] = useState(null);
+  const [githubRepositories, setGithubRepositories] = useState([]);
   const [issues, setIssues] = useState([]);
   const [sprints, setSprints] = useState([]);
   const [members, setMembers] = useState([]);
@@ -280,6 +282,14 @@ export function WorkspaceProvider({ children }) {
       setSprints(sprintRes.sprints || []);
       setIssues(issueRes.issues || []);
       setDashboard(reportRes || null);
+      try {
+        const githubRes = await api.get('/integrations/github/status');
+        setGithubIntegration(githubRes || null);
+        setGithubRepositories(githubRes.repositories || []);
+      } catch {
+        setGithubIntegration(null);
+        setGithubRepositories([]);
+      }
 
       if (!activeProjectIdRef.current || !nextProjects.some((project) => project.id === activeProjectIdRef.current)) {
         setActiveProjectId(nextProjects[0]?.id || '');
@@ -293,6 +303,28 @@ export function WorkspaceProvider({ children }) {
       if (!silent) setLoading(false);
     }
   }, [api, session.apiBase, session.tenant?.id, setActiveProjectId, showError]);
+
+  const connectGithub = useCallback(async () => {
+    const result = await api.get('/integrations/github/install-url');
+    const installUrl = result?.install_url;
+    if (!installUrl) {
+      throw new Error('GitHub connection failed. Try again.');
+    }
+    window.location.assign(installUrl);
+    return result;
+  }, [api]);
+
+  const syncGithubRepositories = useCallback(async () => {
+    const result = await api.post('/integrations/github/sync', {});
+    await loadWorkspace(true, true);
+    return result;
+  }, [api, loadWorkspace]);
+
+  const disconnectGithub = useCallback(async () => {
+    const result = await api.post('/integrations/github/disconnect', {});
+    await loadWorkspace(true, true);
+    return result;
+  }, [api, loadWorkspace]);
 
   const loadMembers = useCallback(async () => {
     const tenantId = session.tenant?.id || '';
@@ -497,11 +529,11 @@ export function WorkspaceProvider({ children }) {
   const projectIssues = issues.filter((issue) => !activeProjectId || issue.project_id === activeProjectId);
   const githubRepos = useMemo(() => {
     const repos = new Set();
-    projectRepositories.forEach((repository) => {
-      if (repository.repo) repos.add(repository.repo);
+    githubRepositories.forEach((repository) => {
+      if (repository.full_name) repos.add(repository.full_name);
     });
     return Array.from(repos).sort();
-  }, [projectRepositories]);
+  }, [githubRepositories]);
   const visibleIssues = projectIssues.filter((issue) => {
     const search = query.trim().toLowerCase();
     if (!search) return true;
@@ -550,6 +582,8 @@ export function WorkspaceProvider({ children }) {
     setIssues([]);
     setSprints([]);
     setMembers([]);
+    setGithubIntegration(null);
+    setGithubRepositories([]);
     setDashboard(null);
     setSprintSchedule(null);
     setSelectedIssue(null);
@@ -725,6 +759,8 @@ export function WorkspaceProvider({ children }) {
     toast, loading, eventStatus,
     projects, issues, sprints, members, dashboard,
     projectRepositories,
+    githubIntegration,
+    githubRepositories,
     activeProject, activeProjectId, setActiveProjectId,
     activeSprint, projectSprints, selectedBoardSprintId,
     boardSprintId, setBoardSprintId,
@@ -741,6 +777,7 @@ export function WorkspaceProvider({ children }) {
     selectedIssue, setSelectedIssue, comments, agentActivity, issueActivity, addComment,
     draggedIssueId, setDraggedIssueId,
     githubRepos,
+    connectGithub, syncGithubRepositories, disconnectGithub,
     showError, showSuccess, logout
   };
 

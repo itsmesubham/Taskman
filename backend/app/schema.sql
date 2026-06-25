@@ -46,10 +46,58 @@ CREATE TABLE IF NOT EXISTS projects (
     UNIQUE (tenant_id, key)
 );
 
+CREATE TABLE IF NOT EXISTS github_installation_states (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    nonce TEXT NOT NULL UNIQUE,
+    state_token TEXT NOT NULL,
+    installation_id BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    consumed_at TIMESTAMPTZ,
+    UNIQUE (tenant_id, user_id, nonce)
+);
+
+CREATE TABLE IF NOT EXISTS github_installations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL UNIQUE REFERENCES tenants(id) ON DELETE CASCADE,
+    installation_id BIGINT NOT NULL UNIQUE,
+    app_slug TEXT NOT NULL DEFAULT 'taskman-ai',
+    account_login TEXT NOT NULL DEFAULT '',
+    account_type TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'CONNECTED',
+    synced_repository_count INTEGER NOT NULL DEFAULT 0,
+    last_synced_at TIMESTAMPTZ,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS github_repositories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    installation_id BIGINT NOT NULL,
+    github_repository_id BIGINT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'github',
+    owner TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'private',
+    default_branch TEXT NOT NULL DEFAULT 'main',
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    last_synced_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, github_repository_id),
+    UNIQUE (tenant_id, installation_id, full_name)
+);
+
 CREATE TABLE IF NOT EXISTS project_repositories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    github_repository_id UUID REFERENCES github_repositories(id) ON DELETE SET NULL,
     provider TEXT NOT NULL DEFAULT 'github',
     repo TEXT NOT NULL,
     default_branch TEXT NOT NULL DEFAULT 'main',
@@ -60,6 +108,15 @@ CREATE TABLE IF NOT EXISTS project_repositories (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, project_id, provider, repo)
+);
+
+CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    delivery_id TEXT NOT NULL UNIQUE,
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS sprints (
@@ -203,6 +260,9 @@ CREATE INDEX IF NOT EXISTS idx_tenant_members_user ON tenant_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_members_user_status ON tenant_members(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_tenant_members_tenant_joined_at ON tenant_members(tenant_id, joined_at);
 CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_github_installation_states_tenant_user ON github_installation_states(tenant_id, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_installations_tenant ON github_installations(tenant_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_repositories_tenant_installation ON github_repositories(tenant_id, installation_id, status);
 CREATE INDEX IF NOT EXISTS idx_project_repositories_tenant_project ON project_repositories(tenant_id, project_id);
 CREATE INDEX IF NOT EXISTS idx_project_repositories_tenant_repo ON project_repositories(tenant_id, provider, repo);
 CREATE INDEX IF NOT EXISTS idx_sprints_tenant_project ON sprints(tenant_id, project_id);
@@ -222,3 +282,4 @@ CREATE INDEX IF NOT EXISTS idx_agent_repo_access_project ON agent_repo_access(te
 CREATE INDEX IF NOT EXISTS idx_agent_claims_tenant_issue ON agent_claims(tenant_id, issue_id);
 CREATE INDEX IF NOT EXISTS idx_external_links_issue ON external_links(issue_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_automation_events_tenant_issue ON automation_events(tenant_id, issue_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_webhook_deliveries_event ON github_webhook_deliveries(event_type, created_at DESC);
