@@ -369,29 +369,37 @@ export function WorkspaceProvider({ children }) {
       bootstrappingRef.current = true;
       setBootstrapReady(false);
       try {
-        const authClient = session.token ? api : publicApi;
         const pathRoute = parseTaskRoute(window.location.pathname);
-        if (session.token && session.tenant?.id && Array.isArray(session.memberships) && session.memberships.length > 0) {
+        if (session.token && session.user) {
           const preferredTenantId = pathRoute.workspaceSlug
-            ? (session.memberships.find((membership) => membership.tenant_slug === pathRoute.workspaceSlug)?.tenant_id || session.tenant.id)
-            : session.tenant.id;
+            ? (session.memberships.find((membership) => membership.tenant_slug === pathRoute.workspaceSlug)?.tenant_id || session.tenant?.id || session.user?.active_tenant_id || null)
+            : session.tenant?.id || session.user?.active_tenant_id || null;
           const workspace = buildActiveWorkspaceContext({
             user: session.user,
             memberships: session.memberships,
             preferredTenantId
           });
           setMemberships(workspace.memberships);
-          if (workspace.user && (!session.user?.role || !session.user?.active_tenant_id)) {
+          if (workspace.user && (!session.user?.role || !session.user?.active_tenant_id || workspace.tenant?.id !== session.tenant?.id)) {
             updateSession({
               ...session,
               user: workspace.user,
-              tenant: workspace.tenant || session.tenant,
+              tenant: workspace.tenant || session.tenant || null,
               memberships: workspace.memberships
             });
           }
-          setAuthStatus(inviteCode ? 'invite' : 'ready');
+          if (inviteCode) {
+            setAuthStatus('invite');
+          } else if (!workspace.memberships.length) {
+            setAuthStatus('onboarding');
+          } else if (workspace.tenant) {
+            setAuthStatus('ready');
+          } else {
+            setAuthStatus('picker');
+          }
           return;
         }
+        const authClient = session.token ? api : publicApi;
         const [meRes, myRes] = await Promise.all([
           authClient.get('/users/me'),
           authClient.get('/tenants/my')
