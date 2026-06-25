@@ -49,7 +49,7 @@ export function WorkspaceProvider({ children }) {
   const [boardFilter, setBoardFilter] = useState('ALL');
   const [boardQuickFilter, setBoardQuickFilter] = useState('ALL');
   const [memberships, setMemberships] = useState([]);
-  const [authStatus, setAuthStatus] = useState(session.token ? 'loading' : 'signed_out');
+  const [authStatus, setAuthStatus] = useState('loading');
   const [route, setRoute] = useState(() => parseTaskRoute(window.location.pathname));
   const [inviteCode, setInviteCode] = useState(() => {
     return extractInviteCodeFromPath(window.location.pathname);
@@ -180,7 +180,7 @@ export function WorkspaceProvider({ children }) {
     };
     const nextSession = {
       ...session,
-      token: result.access_token || session.token,
+      token: result.cookie_auth ? null : (result.access_token || session.token),
       user: nextUser,
       tenant: nextTenant,
       memberships: result.memberships || memberships,
@@ -205,7 +205,7 @@ export function WorkspaceProvider({ children }) {
     localStorage.setItem('taskman_active_tenant', nextTenant?.id || '');
     updateSession({
       ...session,
-      token: result.access_token || session.token,
+      token: result.cookie_auth ? null : (result.access_token || session.token),
       user: nextUser,
       tenant: nextTenant,
       memberships: result.memberships || (result.membership ? [result.membership] : memberships),
@@ -227,7 +227,7 @@ export function WorkspaceProvider({ children }) {
     localStorage.setItem('taskman_active_tenant', nextTenant?.id || '');
     updateSession({
       ...session,
-      token: result.access_token || session.token,
+      token: result.cookie_auth ? null : (result.access_token || session.token),
       user: nextUser,
       tenant: nextTenant,
       memberships: result.memberships || memberships,
@@ -250,7 +250,7 @@ export function WorkspaceProvider({ children }) {
 
   const loadWorkspace = useCallback(async (silent = false, force = false) => {
     const tenantId = session.tenant?.id || '';
-    if (!session.token || !tenantId) return;
+    if (!tenantId) return;
     if (!isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) {
       showError(new Error('Backend API URL must use HTTPS unless it is localhost.'));
       return;
@@ -292,11 +292,11 @@ export function WorkspaceProvider({ children }) {
       workspaceLoadRef.current = false;
       if (!silent) setLoading(false);
     }
-  }, [api, session.apiBase, session.tenant?.id, session.token, setActiveProjectId, showError]);
+  }, [api, session.apiBase, session.tenant?.id, setActiveProjectId, showError]);
 
   const loadMembers = useCallback(async () => {
     const tenantId = session.tenant?.id || '';
-    if (!session.token || !tenantId) {
+    if (!tenantId) {
       setMembers([]);
       return;
     }
@@ -306,7 +306,7 @@ export function WorkspaceProvider({ children }) {
     } catch {
       setMembers([]);
     }
-  }, [api, session.tenant?.id, session.token]);
+  }, [api, session.tenant?.id]);
 
   const loadIssueByKey = useCallback(async (workspaceSlug, taskKey) => {
     if (!taskKey) {
@@ -318,33 +318,28 @@ export function WorkspaceProvider({ children }) {
   }, [api]);
 
   useEffect(() => {
-    if (!session.token || !session.tenant?.id) return;
+    if (!session.tenant?.id) return;
     loadWorkspace();
-  }, [loadWorkspace, session.token, session.tenant?.id]);
+  }, [loadWorkspace, session.tenant?.id]);
 
   useEffect(() => {
-    if (!session.token || !session.tenant?.id) {
+    if (!session.tenant?.id) {
       setMembers([]);
       return;
     }
     loadMembers();
-  }, [loadMembers, session.token, session.tenant?.id]);
+  }, [loadMembers, session.tenant?.id]);
 
   useEffect(() => {
     let cancelled = false;
     const bootstrap = async () => {
-      if (!session.token) {
-        setAuthStatus('signed_out');
-        setBootstrapReady(true);
-        setMemberships([]);
-        return;
-      }
       if (bootstrappingRef.current) return;
       bootstrappingRef.current = true;
       setBootstrapReady(false);
       try {
+        const authClient = session.token ? api : publicApi;
         const pathRoute = parseTaskRoute(window.location.pathname);
-        if (session.tenant?.id && Array.isArray(session.memberships) && session.memberships.length > 0) {
+        if (session.token && session.tenant?.id && Array.isArray(session.memberships) && session.memberships.length > 0) {
           const preferredTenantId = pathRoute.workspaceSlug
             ? (session.memberships.find((membership) => membership.tenant_slug === pathRoute.workspaceSlug)?.tenant_id || session.tenant.id)
             : session.tenant.id;
@@ -366,8 +361,8 @@ export function WorkspaceProvider({ children }) {
           return;
         }
         const [meRes, myRes] = await Promise.all([
-          api.get('/users/me'),
-          api.get('/tenants/my')
+          authClient.get('/users/me'),
+          authClient.get('/tenants/my')
         ]);
         if (cancelled) return;
         const nextUser = meRes.user || session.user || null;
@@ -415,8 +410,9 @@ export function WorkspaceProvider({ children }) {
         setAuthStatus('picker');
       } catch (error) {
         if (!cancelled) {
-          showError(error);
-          setAuthStatus('ready');
+          if (session.token) showError(error);
+          else updateSession({ token: null, user: null, tenant: null, memberships: [], apiBase: session.apiBase || DEFAULT_API_BASE });
+          setAuthStatus('signed_out');
         }
       } finally {
         if (!cancelled) {
@@ -430,10 +426,16 @@ export function WorkspaceProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, [api, inviteCode, session.apiBase, session.token, showError, updateSession]);
+  }, [api, inviteCode, publicApi, session.apiBase, session.token, showError, updateSession]);
 
   useEffect(() => {
-    if (!session.token || !session.tenant?.id || !isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) return undefined;
+    if (authStatus === 'signed_out' && session.user && session.tenant?.id) {
+      setAuthStatus('ready');
+    }
+  }, [authStatus, session.tenant?.id, session.user]);
+
+  useEffect(() => {
+    if (!session.tenant?.id || !isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) return undefined;
 
     let cancelled = false;
     let source = null;
@@ -451,19 +453,25 @@ export function WorkspaceProvider({ children }) {
 
     const connect = async () => {
       setEventStatus('syncing');
-      let streamToken = session.token;
+      let streamToken = null;
       try {
         const result = await api.post('/events/token', {});
         if (cancelled) return;
-        streamToken = result?.stream_token || streamToken;
+        streamToken = result?.stream_token || null;
       } catch {
-        streamToken = session.token;
+        streamToken = session.token || null;
       }
 
-      const useTicket = streamToken && streamToken !== session.token;
-      const url = useTicket
+      const url = streamToken
         ? `${normalizeApiBase(session.apiBase)}/events/stream?ticket=${encodeURIComponent(streamToken)}`
-        : `${normalizeApiBase(session.apiBase)}/events/stream?token=${encodeURIComponent(session.token)}`;
+        : session.token
+          ? `${normalizeApiBase(session.apiBase)}/events/stream?token=${encodeURIComponent(session.token)}`
+          : null;
+
+      if (!url) {
+        setEventStatus('live');
+        return;
+      }
 
       source = new EventSource(url);
       source.addEventListener('connected', () => setEventStatus('live'));
@@ -479,7 +487,7 @@ export function WorkspaceProvider({ children }) {
       if (source) source.close();
       setEventStatus('live');
     };
-  }, [api, session.apiBase, session.token, session.tenant?.id]);
+  }, [api, session.apiBase, session.tenant?.id]);
 
   const activeProject = projects.find((project) => project.id === activeProjectId) || null;
   const projectSprints = sprints.filter((sprint) => !activeProjectId || sprint.project_id === activeProjectId);
@@ -535,6 +543,7 @@ export function WorkspaceProvider({ children }) {
   });
 
   const logout = useCallback(() => {
+    api.post('/auth/logout', {}).catch(() => {});
     updateSession({ token: null, user: null, tenant: null, memberships: [], apiBase: session.apiBase || DEFAULT_API_BASE });
     localStorage.removeItem('taskman_active_tenant');
     setProjects([]);

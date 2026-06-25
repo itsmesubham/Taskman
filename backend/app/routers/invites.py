@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from ..database import fetch_one, execute, get_conn
-from ..security import create_token, get_current_user
+from ..security import create_token, get_current_user, set_auth_cookie
 from ..services.memberships import memberships_for_user
 from ..utils import row_to_json, rows_to_json
 
@@ -38,7 +38,7 @@ def get_invite(invite_code: str):
 
 
 @router.post("/{invite_code}/accept")
-def accept_invite(invite_code: str, current_user: dict = Depends(get_current_user)):
+def accept_invite(invite_code: str, current_user: dict = Depends(get_current_user), request: Request = None, response: Response = None):
     tenant = fetch_one(
         "SELECT id, name, slug, invite_code, invite_enabled FROM tenants WHERE invite_code = %s",
         (invite_code,),
@@ -71,10 +71,14 @@ def accept_invite(invite_code: str, current_user: dict = Depends(get_current_use
             )
             updated = cur.fetchone()
 
+    token = create_token(str(current_user["id"]), str(tenant["id"]), membership["role"])
+    if response is not None and request is not None:
+        set_auth_cookie(response, token, request)
     return {
         "already_member": bool(existing_membership),
         "active_tenant_id": updated["active_tenant_id"],
-        "access_token": create_token(str(current_user["id"]), str(tenant["id"]), membership["role"]),
+        "access_token": token,
+        "cookie_auth": True,
         "tenant": row_to_json({
             "id": tenant["id"],
             "name": tenant["name"],

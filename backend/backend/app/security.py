@@ -4,13 +4,14 @@ import secrets
 from typing import Any
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .config import get_settings
 from .database import fetch_all, fetch_one
 from .services.memberships import memberships_for_user
 
 bearer = HTTPBearer(auto_error=False)
+AUTH_COOKIE_NAME = "taskman_access_token"
 
 
 def hash_password(password: str) -> str:
@@ -59,6 +60,27 @@ def decode_token(token: str, *, allow_events_scope: bool = False) -> dict[str, A
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+def _cookie_secure(request: Request) -> bool:
+    return request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").lower() == "https"
+
+
+def set_auth_cookie(response: Response, token: str, request: Request) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=_cookie_secure(request),
+        samesite="lax",
+        max_age=settings.access_token_expire_minutes * 60,
+        path="/",
+    )
+
+
+def clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
 
 
 def _load_user_context(user_id: str, tenant_id: str | None):
@@ -120,6 +142,9 @@ def get_current_user(
     if credentials and credentials.scheme.lower() == "bearer":
         token = credentials.credentials
     if not token:
+        cookies = getattr(request, "cookies", {}) or {}
+        token = cookies.get(AUTH_COOKIE_NAME)
+    if not token:
         token = request.query_params.get("token")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing auth token")
@@ -150,6 +175,9 @@ def get_current_stream_user(
     token = None
     if credentials and credentials.scheme.lower() == "bearer":
         token = credentials.credentials
+    if not token:
+        cookies = getattr(request, "cookies", {}) or {}
+        token = cookies.get(AUTH_COOKIE_NAME)
     if not token:
         token = request.query_params.get("ticket") or request.query_params.get("token")
     if not token:

@@ -1,10 +1,10 @@
 import time
 from collections import defaultdict, deque
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 from ..database import fetch_one, get_conn
-from ..security import create_token, get_current_user, hash_password, normalize_email, verify_password
+from ..security import clear_auth_cookie, create_token, get_current_user, hash_password, normalize_email, set_auth_cookie, verify_password
 from ..services.memberships import active_membership_for_user, memberships_for_user
 from ..utils import row_to_json, rows_to_json
 
@@ -62,7 +62,7 @@ def _apply_auth_rate_limit(request: Request | None, action: str, limit: int):
 
 
 @router.post("/signup")
-def signup(payload: SignupRequest, request: Request = None):
+def signup(payload: SignupRequest, request: Request = None, response: Response = None):
     _apply_auth_rate_limit(request, "signup", AUTH_SIGNUP_LIMIT)
     email = normalize_email(payload.email)
     with get_conn() as conn:
@@ -80,16 +80,20 @@ def signup(payload: SignupRequest, request: Request = None):
                 user = cur.fetchone()
 
     memberships = rows_to_json(memberships_for_user(str(user["id"])))
+    token = create_token(str(user["id"]))
+    if response is not None and request is not None:
+        set_auth_cookie(response, token, request)
     return {
-        "access_token": create_token(str(user["id"])),
+        "access_token": token,
         "token_type": "bearer",
+        "cookie_auth": True,
         "user": _user_payload(user, memberships),
         "memberships": memberships,
     }
 
 
 @router.post("/login")
-def login(payload: LoginRequest, request: Request = None):
+def login(payload: LoginRequest, request: Request = None, response: Response = None):
     _apply_auth_rate_limit(request, "login", AUTH_LOGIN_LIMIT)
     email = normalize_email(payload.email)
     row = fetch_one(
@@ -99,9 +103,13 @@ def login(payload: LoginRequest, request: Request = None):
     if not row or not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     memberships = rows_to_json(memberships_for_user(str(row["id"])))
+    token = create_token(str(row["id"]))
+    if response is not None and request is not None:
+        set_auth_cookie(response, token, request)
     return {
-        "access_token": create_token(str(row["id"])),
+        "access_token": token,
         "token_type": "bearer",
+        "cookie_auth": True,
         "user": _user_payload(row, memberships),
         "memberships": memberships,
     }
@@ -114,3 +122,10 @@ def me(current_user: dict = Depends(get_current_user)):
         "user": _user_payload(current_user, memberships),
         "memberships": memberships,
     }
+
+
+@router.post("/logout")
+def logout(response: Response, request: Request = None):
+    if response is not None:
+        clear_auth_cookie(response)
+    return {"ok": True}

@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from ..database import fetch_one, get_conn
-from ..security import create_token, get_current_user
+from ..security import create_token, get_current_user, set_auth_cookie
 from ..services.memberships import active_membership_for_user, memberships_for_user
 from ..utils import row_to_json, rows_to_json
 
@@ -31,7 +31,7 @@ def me(current_user: dict = Depends(get_current_user)):
 
 
 @router.patch("/me/active-tenant")
-def set_active_tenant(payload: ActiveTenantRequest, current_user: dict = Depends(get_current_user)):
+def set_active_tenant(payload: ActiveTenantRequest, current_user: dict = Depends(get_current_user), request: Request = None, response: Response = None):
     membership = fetch_one(
         """
         SELECT tm.role, t.id, t.name, t.slug
@@ -50,9 +50,13 @@ def set_active_tenant(payload: ActiveTenantRequest, current_user: dict = Depends
                 (payload.tenant_id, current_user["id"]),
             )
             updated = cur.fetchone()
+    token = create_token(str(current_user["id"]), payload.tenant_id, membership["role"])
+    if response is not None and request is not None:
+        set_auth_cookie(response, token, request)
     return {
         "active_tenant_id": updated["active_tenant_id"],
-        "access_token": create_token(str(current_user["id"]), payload.tenant_id, membership["role"]),
+        "access_token": token,
+        "cookie_auth": True,
         "tenant": row_to_json({"id": membership["id"], "name": membership["name"], "slug": membership["slug"]}),
         "membership": row_to_json({
             "tenant_id": payload.tenant_id,

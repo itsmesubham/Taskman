@@ -1,9 +1,9 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from ..database import fetch_all, fetch_one, execute, get_conn
-from ..security import create_token, get_current_user, require_role, normalize_email
+from ..security import create_token, get_current_user, require_role, normalize_email, set_auth_cookie
 from ..services.memberships import memberships_for_user
 from ..services.workspace_defaults import ensure_workspace_invite, invite_url_for_tenant
 from ..services.activity import record_activity
@@ -56,7 +56,7 @@ def my_tenants(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("")
-def create_tenant(payload: TenantCreate, current_user: dict = Depends(get_current_user)):
+def create_tenant(payload: TenantCreate, current_user: dict = Depends(get_current_user), request: Request = None, response: Response = None):
     base_slug = slugify(payload.slug or payload.name)
     slug = base_slug
     suffix = 1
@@ -103,6 +103,8 @@ def create_tenant(payload: TenantCreate, current_user: dict = Depends(get_curren
 
     tenant = ensure_workspace_invite(str(tenant["id"])) or tenant
     token = create_token(str(current_user["id"]), str(tenant["id"]), "OWNER")
+    if response is not None and request is not None:
+        set_auth_cookie(response, token, request)
     return {
         "tenant": row_to_json({
             "id": tenant["id"],
@@ -113,6 +115,7 @@ def create_tenant(payload: TenantCreate, current_user: dict = Depends(get_curren
         }),
         "membership": row_to_json(membership),
         "access_token": token,
+        "cookie_auth": True,
         "invite_url": invite_url_for_tenant(tenant),
     }
 

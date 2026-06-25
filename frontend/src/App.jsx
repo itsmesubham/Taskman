@@ -9,7 +9,9 @@ import InviteAcceptScreen from './screens/InviteAcceptScreen.jsx';
 function AppGate() {
   const { session, authStatus } = useWorkspace();
 
-  if (!session.token) return <AuthScreen />;
+  if (authStatus === 'loading') return <div className="app-loading">Loading Taskman…</div>;
+  if (authStatus === 'signed_out' && !session.user) return <AuthScreen />;
+  if (authStatus === 'signed_out' && session.user && session.tenant?.id) return <AppShell />;
   if (authStatus === 'invite') return <InviteAcceptScreen />;
   if (authStatus === 'onboarding') return <TenantOnboarding />;
   if (authStatus === 'picker') return <WorkspacePicker />;

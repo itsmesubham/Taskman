@@ -22,6 +22,7 @@ export class ApiClient {
     const { token, apiBase } = this.getState();
     const response = await fetch(`${normalizeApiBase(apiBase)}${path}`, {
       ...options,
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),

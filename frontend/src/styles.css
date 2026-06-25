@@ -1570,6 +1570,16 @@ input:-webkit-autofill:focus {
 .status-pill.in_review { background: var(--purple-soft); color: var(--purple); }
 .status-pill.done { background: var(--success-soft); color: var(--success); }
 .status-pill.blocked { background: var(--danger-soft); color: var(--danger); }
+
+.app-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--app-bg);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
 .card-assignee-wrap { display: grid; gap: 8px; }
 .card-assignee-copy { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .card-assignee-copy span { width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); font-size: 10px; font-weight: 900; flex: 0 0 auto; border: 1px solid var(--brand-border); }
