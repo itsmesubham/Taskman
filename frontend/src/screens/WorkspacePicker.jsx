@@ -3,7 +3,7 @@ import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { initials } from '../utils.js';
 
 export default function WorkspacePicker() {
-  const { memberships, setActiveTenant } = useWorkspace();
+  const { memberships, setActiveTenant, logout } = useWorkspace();
   const [selected, setSelected] = useState(memberships[0]?.tenant_id || '');
   const current = useMemo(() => memberships.find((membership) => membership.tenant_id === selected) || memberships[0] || null, [memberships, selected]);
 
@@ -22,9 +22,16 @@ export default function WorkspacePicker() {
   return (
     <div className="workspace-setup-screen">
       <section className="workspace-setup-card panel">
-        <p className="eyebrow">TASKMAN FOR MODERN TEAMS</p>
-        <h1>Choose workspace</h1>
-        <p className="muted">Select the workspace you want to open.</p>
+        <div className="workspace-setup-header">
+          <div>
+            <p className="eyebrow">TASKMAN FOR MODERN TEAMS</p>
+            <h1>Choose workspace</h1>
+            <p className="muted">Select the workspace you want to open.</p>
+          </div>
+          <div className="workspace-setup-actions">
+            <button type="button" className="ghost" onClick={logout}>Logout</button>
+          </div>
+        </div>
 
         <form className="workspace-picker-list" onSubmit={submit}>
           {memberships.map((membership) => (

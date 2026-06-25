@@ -3,7 +3,7 @@ import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { extractInviteCode } from '../utils/invite.js';
 
 export default function TenantOnboarding() {
-  const { createWorkspace, api, acceptInvite, navigate } = useWorkspace();
+  const { createWorkspace, api, acceptInvite, navigate, logout } = useWorkspace();
   const [mode, setMode] = useState('create');
   const [workspaceName, setWorkspaceName] = useState('');
   const [workspaceSlug, setWorkspaceSlug] = useState('');
@@ -58,9 +58,16 @@ export default function TenantOnboarding() {
   return (
     <div className="workspace-setup-screen">
       <section className="workspace-setup-card panel">
-        <p className="eyebrow">TASKMAN FOR MODERN TEAMS</p>
-        <h1>Set up your workspace</h1>
-        <p className="muted">Create a workspace or join your team with an invite link.</p>
+        <div className="workspace-setup-header">
+          <div>
+            <p className="eyebrow">TASKMAN FOR MODERN TEAMS</p>
+            <h1>Set up your workspace</h1>
+            <p className="muted">Create a workspace or join your team with an invite link.</p>
+          </div>
+          <div className="workspace-setup-actions">
+            <button type="button" className="ghost" onClick={logout}>Logout</button>
+          </div>
+        </div>
 
         <div className="setup-switcher">
           <button type="button" className={mode === 'create' ? 'active' : ''} onClick={() => setMode('create')}>Create workspace</button>
