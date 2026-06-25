@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 from ..database import fetch_one, get_conn
-from ..security import clear_auth_cookie, create_token, get_current_user, hash_password, normalize_email, set_auth_cookie, verify_password
+from ..security import _user_row_by_id, clear_auth_cookie, create_token, get_current_user, hash_password, normalize_email, set_auth_cookie, verify_password
 from ..services.memberships import active_membership_for_user, memberships_for_user
 from ..utils import row_to_json, rows_to_json
 
@@ -67,7 +67,10 @@ def signup(payload: SignupRequest, request: Request = None, response: Response =
     email = normalize_email(payload.email)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s", (email,))
+            try:
+                cur.execute("SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s", (email,))
+            except Exception:
+                cur.execute("SELECT id, name, email, password_hash FROM users WHERE email = %s", (email,))
             user = cur.fetchone()
             if user:
                 if not verify_password(payload.password, user["password_hash"]):
@@ -78,7 +81,6 @@ def signup(payload: SignupRequest, request: Request = None, response: Response =
                     (payload.name.strip(), email, hash_password(payload.password)),
                 )
                 user = cur.fetchone()
-
     memberships = rows_to_json(memberships_for_user(str(user["id"])))
     token = create_token(str(user["id"]))
     if response is not None and request is not None:
@@ -96,10 +98,16 @@ def signup(payload: SignupRequest, request: Request = None, response: Response =
 def login(payload: LoginRequest, request: Request = None, response: Response = None):
     _apply_auth_rate_limit(request, "login", AUTH_LOGIN_LIMIT)
     email = normalize_email(payload.email)
-    row = fetch_one(
-        "SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s",
-        (email,),
-    )
+    try:
+        row = fetch_one(
+            "SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s",
+            (email,),
+        )
+    except Exception:
+        row = fetch_one(
+            "SELECT id, name, email, password_hash FROM users WHERE email = %s",
+            (email,),
+        )
     if not row or not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     memberships = rows_to_json(memberships_for_user(str(row["id"])))

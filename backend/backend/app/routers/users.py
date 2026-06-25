@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from ..database import fetch_one, get_conn
-from ..security import create_token, get_current_user, set_auth_cookie
+from ..security import _users_has_active_tenant_id, create_token, get_current_user, set_auth_cookie
 from ..services.memberships import active_membership_for_user, memberships_for_user
 from ..utils import row_to_json, rows_to_json
 
@@ -45,11 +45,13 @@ def set_active_tenant(payload: ActiveTenantRequest, current_user: dict = Depends
         raise HTTPException(status_code=404, detail="Workspace membership not found")
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET active_tenant_id = %s, updated_at = now() WHERE id = %s RETURNING active_tenant_id",
-                (payload.tenant_id, current_user["id"]),
-            )
-            updated = cur.fetchone()
+            updated = {"active_tenant_id": payload.tenant_id}
+            if _users_has_active_tenant_id():
+                cur.execute(
+                    "UPDATE users SET active_tenant_id = %s, updated_at = now() WHERE id = %s RETURNING active_tenant_id",
+                    (payload.tenant_id, current_user["id"]),
+                )
+                updated = cur.fetchone() or updated
     token = create_token(str(current_user["id"]), payload.tenant_id, membership["role"])
     if response is not None and request is not None:
         set_auth_cookie(response, token, request)

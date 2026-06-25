@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from ..database import fetch_all, fetch_one, execute, get_conn
-from ..security import create_token, get_current_user, require_role, normalize_email, set_auth_cookie
+from ..security import _users_has_active_tenant_id, create_token, get_current_user, require_role, normalize_email, set_auth_cookie
 from ..services.memberships import memberships_for_user
 from ..services.workspace_defaults import ensure_workspace_invite, invite_url_for_tenant
 from ..services.activity import record_activity
@@ -87,10 +87,11 @@ def create_tenant(payload: TenantCreate, current_user: dict = Depends(get_curren
                 if not membership:
                     raise HTTPException(status_code=500, detail="Workspace membership creation failed")
 
-                cur.execute(
-                    "UPDATE users SET active_tenant_id = %s, updated_at = now() WHERE id = %s",
-                    (tenant["id"], current_user["id"]),
-                )
+                if _users_has_active_tenant_id():
+                    cur.execute(
+                        "UPDATE users SET active_tenant_id = %s, updated_at = now() WHERE id = %s",
+                        (tenant["id"], current_user["id"]),
+                    )
     except HTTPException:
         raise
     except Exception as exc:

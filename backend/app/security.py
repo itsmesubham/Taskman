@@ -4,6 +4,7 @@ import secrets
 from typing import Any
 import bcrypt
 import jwt
+from functools import lru_cache
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .config import get_settings
@@ -13,6 +14,37 @@ from .utils import serialize
 
 bearer = HTTPBearer(auto_error=False)
 AUTH_COOKIE_NAME = "taskman_access_token"
+
+
+@lru_cache(maxsize=1)
+def _users_has_active_tenant_id() -> bool:
+    try:
+        row = fetch_one(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'users'
+                  AND column_name = 'active_tenant_id'
+            ) AS present
+            """
+        )
+        return bool(row and row.get("present"))
+    except Exception:
+        return False
+
+
+def _user_row_by_id(user_id: str):
+    if _users_has_active_tenant_id():
+        return fetch_one(
+            "SELECT id, name, email, active_tenant_id FROM users WHERE id = %s",
+            (user_id,),
+        )
+    return fetch_one(
+        "SELECT id, name, email FROM users WHERE id = %s",
+        (user_id,),
+    )
 
 
 def hash_password(password: str) -> str:
@@ -86,40 +118,53 @@ def clear_auth_cookie(response: Response) -> None:
 
 def _load_user_context(user_id: str, tenant_id: str | None):
     if tenant_id:
-        row = fetch_one(
-            """
-            SELECT u.id, u.name, u.email, u.active_tenant_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
-            FROM users u
-            JOIN tenant_members tm ON tm.user_id = u.id
-            JOIN tenants t ON t.id = tm.tenant_id
-            WHERE u.id = %s AND tm.tenant_id = %s
-            """,
-            (user_id, tenant_id),
-        )
+        if _users_has_active_tenant_id():
+            row = fetch_one(
+                """
+                SELECT u.id, u.name, u.email, u.active_tenant_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+                FROM users u
+                JOIN tenant_members tm ON tm.user_id = u.id
+                JOIN tenants t ON t.id = tm.tenant_id
+                WHERE u.id = %s AND tm.tenant_id = %s
+                """,
+                (user_id, tenant_id),
+            )
+        else:
+            row = fetch_one(
+                """
+                SELECT u.id, u.name, u.email, NULL::uuid AS active_tenant_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+                FROM users u
+                JOIN tenant_members tm ON tm.user_id = u.id
+                JOIN tenants t ON t.id = tm.tenant_id
+                WHERE u.id = %s AND tm.tenant_id = %s
+                """,
+                (user_id, tenant_id),
+            )
         if not row:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not a tenant member")
         return row
 
-    active_row = fetch_one(
-        """
-        SELECT u.id, u.name, u.email, u.active_tenant_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
-        FROM users u
-        LEFT JOIN tenant_members tm ON tm.user_id = u.id AND tm.tenant_id = u.active_tenant_id
-        LEFT JOIN tenants t ON t.id = tm.tenant_id
-        WHERE u.id = %s
-        """,
-        (user_id,),
-    )
-    if not active_row:
+    user_row = _user_row_by_id(user_id)
+    if not user_row:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    if active_row["tenant_id"]:
-        return active_row
-
     memberships = memberships_for_user(user_id)
+    active_tenant_id = user_row.get("active_tenant_id")
+
+    if active_tenant_id:
+        active_membership = next((membership for membership in memberships if str(membership.get("tenant_id")) == str(active_tenant_id)), None)
+        if active_membership:
+            return {
+                **user_row,
+                "tenant_id": active_membership["tenant_id"],
+                "role": active_membership["role"],
+                "tenant_name": active_membership["tenant_name"],
+                "tenant_slug": active_membership["tenant_slug"],
+            }
+
     if len(memberships) == 1:
         membership = memberships[0]
         return {
-            **active_row,
+            **user_row,
             "tenant_id": membership["tenant_id"],
             "role": membership["role"],
             "tenant_name": membership["tenant_name"],
@@ -127,7 +172,7 @@ def _load_user_context(user_id: str, tenant_id: str | None):
         }
 
     return {
-        **active_row,
+        **user_row,
         "tenant_id": None,
         "role": None,
         "tenant_name": None,
