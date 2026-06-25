@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 from typing import Any
 import bcrypt
 import jwt
@@ -22,48 +24,44 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_token(user_id: str, tenant_id: str | None = None, role: str | None = None) -> str:
+def create_token(
+    user_id: str,
+    tenant_id: str | None = None,
+    role: str | None = None,
+    *,
+    expires_minutes: int | None = None,
+    scope: str | None = None,
+) -> str:
     settings = get_settings()
     now = datetime.now(timezone.utc)
+    expiry_minutes = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
     payload = {
         "sub": user_id,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=settings.access_token_expire_minutes)).timestamp()),
+        "exp": int((now + timedelta(minutes=expiry_minutes)).timestamp()),
     }
     if tenant_id:
         payload["tenant_id"] = tenant_id
     if role:
         payload["role"] = role
+    if scope:
+        payload["scope"] = scope
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
-def decode_token(token: str) -> dict[str, Any]:
+def decode_token(token: str, *, allow_events_scope: bool = False) -> dict[str, Any]:
     try:
-        return jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
+        payload = jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
+        if payload.get("scope") == "events" and not allow_events_scope:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
-def get_current_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
-) -> dict[str, Any]:
-    token = None
-    if credentials and credentials.scheme.lower() == "bearer":
-        token = credentials.credentials
-    if not token:
-        token = request.query_params.get("token")
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing auth token")
-
-    payload = decode_token(token)
-    user_id = payload.get("sub")
-    tenant_id = payload.get("tenant_id")
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-
+def _load_user_context(user_id: str, tenant_id: str | None):
     if tenant_id:
         row = fetch_one(
             """
@@ -112,6 +110,57 @@ def get_current_user(
         "tenant_name": None,
         "tenant_slug": None,
     }
+
+
+def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> dict[str, Any]:
+    token = None
+    if credentials and credentials.scheme.lower() == "bearer":
+        token = credentials.credentials
+    if not token:
+        token = request.query_params.get("token")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing auth token")
+
+    payload = decode_token(token)
+    user_id = payload.get("sub")
+    tenant_id = payload.get("tenant_id")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+    return _load_user_context(str(user_id), str(tenant_id) if tenant_id else None)
+
+
+def create_event_stream_token(user_id: str, tenant_id: str, role: str | None = None) -> str:
+    settings = get_settings()
+    return create_token(
+        user_id,
+        tenant_id,
+        role,
+        expires_minutes=settings.event_stream_token_expire_minutes,
+        scope="events",
+    )
+
+
+def get_current_stream_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> dict[str, Any]:
+    token = None
+    if credentials and credentials.scheme.lower() == "bearer":
+        token = credentials.credentials
+    if not token:
+        token = request.query_params.get("ticket") or request.query_params.get("token")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing auth token")
+
+    payload = decode_token(token, allow_events_scope=True)
+    user_id = payload.get("sub")
+    tenant_id = payload.get("tenant_id")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+    return _load_user_context(str(user_id), str(tenant_id) if tenant_id else None)
 
 
 def require_role(*roles: str):

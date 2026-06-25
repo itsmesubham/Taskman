@@ -6,8 +6,8 @@ import { getTaskUrl } from '../utils/taskRoutes.js';
 import { getBoardWorkflowStatus, getTaskStateBadges } from '../utils/taskWorkflow.js';
 import TaskDetailPage from './TaskDetailPage.jsx';
 
-const BOARD_STATUSES = STATUSES.map((status) => status.key);
-const DRAWER_STATUSES = [...BOARD_STATUSES, 'BLOCKED'];
+const BOARD_STATUSES = Array.from(new Set(STATUSES.map((status) => status.key)));
+const DRAWER_STATUSES = Array.from(new Set([...BOARD_STATUSES, 'BLOCKED']));
 
 export default function IssueDrawer({ mode = 'drawer' }) {
   const { selectedIssue, setSelectedIssue, comments, agentActivity, addComment, updateIssue, deleteIssue, members, projectSprints, projects, projectRepositories, session, navigate, showSuccess, showError } = useWorkspace();
@@ -344,7 +344,7 @@ export default function IssueDrawer({ mode = 'drawer' }) {
               </div>
               <div>
                 <span>PR link</span>
-                <strong>{draft.github_pr_url ? <a href={draft.github_pr_url} target="_blank" rel="noreferrer">Open PR</a> : 'Not linked'}</strong>
+                <strong>{draft.github_pr_url ? <a href={draft.github_pr_url} target="_blank" rel="noopener noreferrer">Open PR</a> : 'Not linked'}</strong>
               </div>
               <div>
                 <span>PR status</span>
@@ -377,7 +377,7 @@ export default function IssueDrawer({ mode = 'drawer' }) {
             </div>
 
             <div className="agent-pr-actions">
-              {draft.github_pr_url && <button type="button" className="ghost" onClick={() => window.open(draft.github_pr_url, '_blank', 'noreferrer')}>Open PR</button>}
+              {draft.github_pr_url && <button type="button" className="ghost" onClick={() => window.open(draft.github_pr_url, '_blank', 'noopener,noreferrer')}>Open PR</button>}
               {draft.github_pr_url && <button type="button" className="ghost" onClick={requestChanges}>Request changes</button>}
               <button type="button" className="ghost" onClick={markBlocked}>Mark blocked</button>
               <button type="button" className="ghost" onClick={releaseClaim}>Release agent claim</button>

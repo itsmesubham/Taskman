@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_API_BASE, ApiClient } from '../api/client.js';
+import { DEFAULT_API_BASE, ApiClient, isSecureApiBase } from '../api/client.js';
 import { useWorkspace } from '../context/WorkspaceContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { buildAuthSessionFromResult, buildInviteAcceptedSession } from '../utils/workspaceSession.js';
@@ -42,6 +42,10 @@ export default function AuthScreen() {
   const submit = useCallback(async (event) => {
     event.preventDefault();
     setError('');
+    if (!isSecureApiBase(DEFAULT_API_BASE)) {
+      setError('Backend API URL must use HTTPS unless it is localhost.');
+      return;
+    }
     setBusy(true);
     try {
       const payload = mode === 'login'
@@ -49,6 +53,8 @@ export default function AuthScreen() {
         : { name: fullName, email, password };
       const result = await authClient.post(mode === 'login' ? '/auth/login' : '/auth/signup', payload);
       const baseSession = buildAuthSessionFromResult(result, DEFAULT_API_BASE);
+      setPassword('');
+      setFullName('');
 
       if (inviteCode) {
         const inviteClient = new ApiClient(() => ({ token: result.access_token, apiBase: DEFAULT_API_BASE }));
@@ -223,6 +229,8 @@ export default function AuthScreen() {
                   onChange={(event) => setFullName(event.target.value)}
                   placeholder="Your name"
                   autoComplete="name"
+                  autoCapitalize="words"
+                  autoCorrect="off"
                   required
                 />
               </label>
@@ -236,6 +244,9 @@ export default function AuthScreen() {
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="you@company.com"
                 autoComplete="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck="false"
                 required
               />
             </label>
@@ -247,6 +258,9 @@ export default function AuthScreen() {
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder={mode === 'login' ? 'Enter your password' : 'Create a password'}
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck="false"
                 required
                 minLength={6}
               />

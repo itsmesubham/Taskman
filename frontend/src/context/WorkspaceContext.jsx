@@ -435,20 +435,51 @@ export function WorkspaceProvider({ children }) {
   useEffect(() => {
     if (!session.token || !session.tenant?.id || !isSecureApiBase(session.apiBase || DEFAULT_API_BASE)) return undefined;
 
-    const url = `${normalizeApiBase(session.apiBase)}/events/stream?token=${encodeURIComponent(session.token)}`;
-    const source = new EventSource(url);
-    setEventStatus('syncing');
+    let cancelled = false;
+    let source = null;
 
-    source.addEventListener('connected', () => setEventStatus('live'));
-    source.addEventListener('heartbeat', () => setEventStatus('live'));
-    source.onerror = () => setEventStatus('live');
+    try {
+      const apiOrigin = new URL(normalizeApiBase(session.apiBase)).origin;
+      const devHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (devHost && apiOrigin !== window.location.origin) {
+        setEventStatus('live');
+        return undefined;
+      }
+    } catch {
+      // Fall through to the normal SSE connection attempt.
+    }
+
+    const connect = async () => {
+      setEventStatus('syncing');
+      let streamToken = session.token;
+      try {
+        const result = await api.post('/events/token', {});
+        if (cancelled) return;
+        streamToken = result?.stream_token || streamToken;
+      } catch {
+        streamToken = session.token;
+      }
+
+      const useTicket = streamToken && streamToken !== session.token;
+      const url = useTicket
+        ? `${normalizeApiBase(session.apiBase)}/events/stream?ticket=${encodeURIComponent(streamToken)}`
+        : `${normalizeApiBase(session.apiBase)}/events/stream?token=${encodeURIComponent(session.token)}`;
+
+      source = new EventSource(url);
+      source.addEventListener('connected', () => setEventStatus('live'));
+      source.addEventListener('heartbeat', () => setEventStatus('live'));
+      source.onerror = () => setEventStatus('live');
+    };
+
+    connect();
 
     return () => {
+      cancelled = true;
       window.clearTimeout(refreshTimer.current);
-      source.close();
+      if (source) source.close();
       setEventStatus('live');
     };
-  }, [session.apiBase, session.token]);
+  }, [api, session.apiBase, session.token, session.tenant?.id]);
 
   const activeProject = projects.find((project) => project.id === activeProjectId) || null;
   const projectSprints = sprints.filter((sprint) => !activeProjectId || sprint.project_id === activeProjectId);

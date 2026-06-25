@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import time
+from collections import defaultdict, deque
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
 from ..database import fetch_one, get_conn
 from ..security import create_token, get_current_user, hash_password, normalize_email, verify_password
@@ -6,6 +9,10 @@ from ..services.memberships import active_membership_for_user, memberships_for_u
 from ..utils import row_to_json, rows_to_json
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+AUTH_RATE_LIMITS: dict[str, deque[float]] = defaultdict(deque)
+AUTH_RATE_WINDOW_SECONDS = 60
+AUTH_LOGIN_LIMIT = 10
+AUTH_SIGNUP_LIMIT = 5
 
 
 class SignupRequest(BaseModel):
@@ -33,8 +40,30 @@ def _user_payload(user: dict, memberships: list[dict] | None = None):
     })
 
 
+def _client_ip(request: Request | None) -> str:
+    if request is None:
+        return "test"
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+def _apply_auth_rate_limit(request: Request | None, action: str, limit: int):
+    if request is None:
+        return
+    now = time.time()
+    bucket = AUTH_RATE_LIMITS[f"{action}:{_client_ip(request)}"]
+    while bucket and now - bucket[0] > AUTH_RATE_WINDOW_SECONDS:
+        bucket.popleft()
+    if len(bucket) >= limit:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many auth attempts. Please try again later.")
+    bucket.append(now)
+
+
 @router.post("/signup")
-def signup(payload: SignupRequest):
+def signup(payload: SignupRequest, request: Request = None):
+    _apply_auth_rate_limit(request, "signup", AUTH_SIGNUP_LIMIT)
     email = normalize_email(payload.email)
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -42,7 +71,7 @@ def signup(payload: SignupRequest):
             user = cur.fetchone()
             if user:
                 if not verify_password(payload.password, user["password_hash"]):
-                    raise HTTPException(status_code=409, detail="Email already exists with a different password")
+                    raise HTTPException(status_code=409, detail="Unable to create account")
             else:
                 cur.execute(
                     "INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s) RETURNING *",
@@ -60,7 +89,8 @@ def signup(payload: SignupRequest):
 
 
 @router.post("/login")
-def login(payload: LoginRequest):
+def login(payload: LoginRequest, request: Request = None):
+    _apply_auth_rate_limit(request, "login", AUTH_LOGIN_LIMIT)
     email = normalize_email(payload.email)
     row = fetch_one(
         "SELECT id, name, email, password_hash, active_tenant_id FROM users WHERE email = %s",

@@ -593,7 +593,7 @@ export default function TaskDetailPage() {
                     <h3>Pull request</h3>
                     <span>Link the GitHub PR tied to this task.</span>
                   </div>
-                  {issue.github_pr_url ? <button type="button" className="ghost tiny" onClick={() => window.open(issue.github_pr_url, '_blank', 'noreferrer')}>Open PR</button> : null}
+                  {issue.github_pr_url ? <button type="button" className="ghost tiny" onClick={() => window.open(issue.github_pr_url, '_blank', 'noopener,noreferrer')}>Open PR</button> : null}
                 </div>
                 {issue.github_pr_url ? (
                   <div className="task-pr-card">

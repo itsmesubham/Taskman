@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://taskman:taskman@localhost:5432/taskman"
     jwt_secret: str = "change-this-secret-in-production"
     access_token_expire_minutes: int = 10080
+    event_stream_token_expire_minutes: int = 15
     cors_origins: str = "https://taskman.fnetrix.com,https://www.taskman.fnetrix.com,http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
     cors_origin_regex: str = r"https?://([a-z0-9-]+\.)?fnetrix\.com(:\d+)?|https?://localhost(:\d+)?|https?://127\.0\.0\.1(:\d+)?"
 
