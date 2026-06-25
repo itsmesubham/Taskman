@@ -263,11 +263,10 @@ export function WorkspaceProvider({ children }) {
     workspaceLoadedTenantRef.current = tenantId;
     if (!silent) setLoading(true);
     try {
-      const [defaultsRes, scheduleRes, projectRes, repoRes, sprintRes, issueRes, reportRes] = await Promise.all([
+      const [defaultsRes, scheduleRes, projectRes, sprintRes, issueRes, reportRes] = await Promise.all([
         api.get('/workspaces/board'),
         api.get('/sprints/schedule'),
         api.get('/projects'),
-        api.get('/projects/repositories'),
         api.get('/sprints'),
         api.get('/issues'),
         api.get('/reports/dashboard')
@@ -278,10 +277,15 @@ export function WorkspaceProvider({ children }) {
 
       const nextProjects = projectRes.projects || [];
       setProjects(nextProjects);
-      setProjectRepositories(repoRes.repositories || []);
       setSprints(sprintRes.sprints || []);
       setIssues(issueRes.issues || []);
       setDashboard(reportRes || null);
+      try {
+        const repoRes = await api.get('/projects/repositories');
+        setProjectRepositories(repoRes.repositories || []);
+      } catch {
+        setProjectRepositories([]);
+      }
       try {
         const githubRes = await api.get('/integrations/github/status');
         setGithubIntegration(githubRes || null);
@@ -370,6 +374,10 @@ export function WorkspaceProvider({ children }) {
       setBootstrapReady(false);
       try {
         const pathRoute = parseTaskRoute(window.location.pathname);
+        if (!session.token) {
+          setAuthStatus('signed_out');
+          return;
+        }
         if (session.token && session.user) {
           const preferredTenantId = pathRoute.workspaceSlug
             ? (session.memberships.find((membership) => membership.tenant_slug === pathRoute.workspaceSlug)?.tenant_id || session.tenant?.id || session.user?.active_tenant_id || null)
@@ -399,7 +407,7 @@ export function WorkspaceProvider({ children }) {
           }
           return;
         }
-        const authClient = session.token ? api : publicApi;
+        const authClient = api;
         const [meRes, myRes] = await Promise.all([
           authClient.get('/users/me'),
           authClient.get('/tenants/my')

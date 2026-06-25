@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from functools import lru_cache
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from ..database import fetch_all, fetch_one, execute, get_conn
@@ -28,6 +32,70 @@ def resolve_tenant_id(current_user: dict) -> str:
     if not tenant_id:
         raise HTTPException(status_code=400, detail="Workspace not selected")
     return str(tenant_id)
+
+
+@lru_cache(maxsize=1)
+def _project_repositories_has_github_repository_id() -> bool:
+    try:
+        row = fetch_one(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'project_repositories'
+                  AND column_name = 'github_repository_id'
+            ) AS present
+            """
+        )
+        return bool(row and row.get("present"))
+    except Exception:
+        return False
+
+
+def _repository_select_fragment() -> str:
+    if _project_repositories_has_github_repository_id():
+        return """
+               pr.github_repository_id, gr.full_name AS github_full_name, gr.visibility AS github_visibility, gr.default_branch AS github_default_branch,
+        """
+    return """
+               NULL::uuid AS github_repository_id, NULL::text AS github_full_name, NULL::text AS github_visibility, NULL::text AS github_default_branch,
+    """
+
+
+def _repository_join_fragment() -> str:
+    if _project_repositories_has_github_repository_id():
+        return "LEFT JOIN github_repositories gr ON gr.id = pr.github_repository_id"
+    return ""
+
+
+def _repository_insert_columns() -> str:
+    if _project_repositories_has_github_repository_id():
+        return "(tenant_id, project_id, provider, repo, default_branch, branch_prefix, is_default, created_by, github_repository_id)"
+    return "(tenant_id, project_id, provider, repo, default_branch, branch_prefix, is_default, created_by)"
+
+
+def _repository_insert_values() -> str:
+    if _project_repositories_has_github_repository_id():
+        return "%s, %s, %s, %s, %s, %s, %s, %s, %s"
+    return "%s, %s, %s, %s, %s, %s, %s, %s"
+
+
+def _repository_insert_params(payload: ProjectRepositoryCreate, tenant_id: str, project_id: str, current_user: dict, github_repo: dict | None, repo: str) -> tuple:
+    default_branch = (payload.default_branch.strip() if payload.default_branch else "") or (github_repo["default_branch"] if github_repo else "main")
+    base_params = (
+        tenant_id,
+        project_id,
+        payload.provider,
+        repo,
+        default_branch,
+        payload.branch_prefix.strip(),
+        payload.is_default,
+        current_user["id"],
+    )
+    if _project_repositories_has_github_repository_id():
+        return base_params + (payload.github_repository_id,)
+    return base_params
 
 
 @router.get("")
