@@ -13,8 +13,12 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request as UrlRequest, urlopen
 
 import jwt
-from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException, status
+
+try:
+    from cryptography.hazmat.primitives import serialization
+except Exception:  # pragma: no cover - optional dependency in some deployments
+    serialization = None
 
 from ..config import get_settings
 from ..database import execute, fetch_all, fetch_one, get_conn
@@ -31,6 +35,11 @@ def _settings():
 
 def _github_error(message: str, code: int = 502) -> HTTPException:
     return HTTPException(status_code=code, detail=message)
+
+
+def _require_cryptography() -> None:
+    if serialization is None:
+        raise _github_error("GitHub integration requires the cryptography package", code=503)
 
 
 def _json_dumps(payload: Any) -> bytes:
@@ -87,6 +96,7 @@ def build_github_app_jwt() -> str:
     settings = _settings()
     if not settings.github_app_id or not settings.github_private_key_pem:
         raise _github_error("GitHub app is not configured", code=500)
+    _require_cryptography()
     now = int(time.time())
     payload = {
         "iat": now - 60,
